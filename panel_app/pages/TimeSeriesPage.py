@@ -2,16 +2,14 @@ import panel as pn
 import param
 from components.TimeSeriesPlot import create_plot
 from components.StockSelector import StockSelector
-from pages.tabs import time_series_tab, errors_metrics_tab
-from templates.layout import create_layout
 
-class Dashboard(param.Parameterized):
+class TimeSeriesPage(param.Parameterized):
     stock_selector = param.ClassSelector(class_=StockSelector)
     plot_pane = param.ClassSelector(class_=pn.pane.Plotly, default=pn.pane.Plotly())
     
-    def __init__(self, **params):
+    def __init__(self, stock_selector, **params):
         super().__init__(**params)
-        self.stock_selector = StockSelector()
+        self.stock_selector = stock_selector
         self.update_plot()
 
     @param.depends('stock_selector.stock', watch=True)
@@ -21,8 +19,13 @@ class Dashboard(param.Parameterized):
         self.plot_pane.object = new_plot
 
     def view(self):
-        return create_layout(self.stock_selector, self.plot_pane)
+        return pn.Column(
+            self.stock_selector.view(),
+            pn.Card(self.plot_pane, title="Stock Price Over Time", sizing_mode="stretch_both", css_classes=["card"]),
+            margin=(10, 10, 10, 10),
+            sizing_mode='stretch_both'
+        )
 
-def create_dashboard():
-    dashboard = Dashboard()
-    return dashboard.view()
+def create_time_series_page(stock_selector):
+    page = TimeSeriesPage(stock_selector)
+    return page.view()
