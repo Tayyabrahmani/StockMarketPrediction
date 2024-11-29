@@ -1,21 +1,22 @@
 import panel as pn
+from static.config import MAIN_MAX_WIDTH, SCROLLABLE_STYLE, SIDEBAR_WIDTH
 
-def create_layout(tabs):
-    sidebar = pn.Column(
-        pn.pane.HTML("<div class='sidebar'><h2>Select Stock</h2></div>"),
-        tabs[0].object.param.stock_selector.view(),
-        width=300,
-        sizing_mode='stretch_height'
+def create_layout(sidebar, tabs):
+    """
+    Creates the application layout with a sidebar and tabs.
+    """
+    template = pn.template.BootstrapTemplate(
+        title="Stock Prices Dashboard",
+        main_max_width=MAIN_MAX_WIDTH,
     )
 
-    # main_area = pn.Column(
-    #     pn.pane.HTML("<div class='main-title'>Stock Prices Dashboard</div>"),
-    #     pn.Card(plot_pane, title="Stock Price Over Time", sizing_mode="stretch_both", css_classes=["card"]),
-    #     margin=(10, 10, 10, 10),
-    #     sizing_mode='stretch_both'
-    # )
+    # Sidebar
+    template.sidebar.append(sidebar.view())
+    template.sidebar[-1].margin = 0
 
-    template = pn.template.BootstrapTemplate(title='Stock Prices Dashboard')
-    template.sidebar.append(sidebar)
-    template.main.append(pn.Tabs(*tabs, sizing_mode='stretch_both'))
+    # Main content with scrollable style
+    template.main.append(
+        pn.Tabs(*tabs, margin=0, sizing_mode="stretch_width")
+    )
+    template.main[0].style = SCROLLABLE_STYLE
     return template

@@ -1,42 +1,28 @@
 import panel as pn
-from components.StockSelector import StockSelector
-from pages.TimeSeriesPage import create_time_series_page
-from pages.MetricsPage import create_metrics_page
-
-# Load custom CSS from the static directory
-css_file = "static/styles.css"
-pn.config.css_files.append(css_file)
-
 # Enable the Panel extension
 pn.extension('plotly', 'tabulator', 'bootstrap')
+
+import pandas as pd
+from components.StockSelector import StockSelector
+from components.Selectors import ModelSelector
+from components.Sidebar import Sidebar
+from pages.PageFactory import create_pages
+from templates.layout import create_layout
+
 
 def run_app():
     # Create a shared StockSelector instance
     stock_selector = StockSelector()
+    model_selector = ModelSelector()
 
-    # Create the time series and metrics views
-    time_series_view = create_time_series_page(stock_selector)
-    metrics_view = create_metrics_page(stock_selector)
+    # Create the sidebar instance
+    sidebar = Sidebar(stock_selector, model_selector)
 
-    # Create tabs
-    tabs = pn.Tabs(
-        ('Time Series', time_series_view),
-        ('Metrics', metrics_view),
-        sizing_mode='stretch_both'
-    )
+    # Create the pages dynamically
+    tabs = create_pages(stock_selector, model_selector)
 
-    # Create sidebar and main content layout
-    sidebar = pn.Column(
-        pn.pane.HTML("<div class='sidebar'><h2>Select Stock</h2></div>"),
-        stock_selector.view(),
-        width=300,
-        margin=(10, 10, 10, 10),
-        sizing_mode='stretch_height'
-    )
-
-    template = pn.template.BootstrapTemplate(title='Stock Prices Dashboard')
-    template.sidebar.append(sidebar)
-    template.main.append(tabs)
+    # Create the complete layout
+    template = create_layout(sidebar, tabs)
 
     # Serve the Panel application
     pn.serve(template, show=True, port=5000)

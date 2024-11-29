@@ -15,7 +15,6 @@ class MetricsPage(param.Parameterized):
             self.stock_selector.view(),
             self.create_metrics_errors_view(),
             margin=(10, 10, 10, 10),
-            sizing_mode='stretch_both'
         )
 
     def create_metrics_errors_view(self):
@@ -23,7 +22,6 @@ class MetricsPage(param.Parameterized):
             pn.pane.Markdown("# Metrics and Errors", styles={'text-align': 'center'}),
             pn.pane.Markdown("## Error Metrics will be displayed here"),
             margin=(10, 10, 10, 10),
-            sizing_mode='stretch_both'
         )
 
 def create_metrics_page(stock_selector):
