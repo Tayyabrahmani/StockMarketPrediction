@@ -1,7 +1,7 @@
 import panel as pn
 import param
 from templates.layout import create_layout
-from components.StockSelector import StockSelector
+from components.Selectors import StockSelector
 
 class MetricsPage(param.Parameterized):
     stock_selector = param.ClassSelector(class_=StockSelector, allow_refs=True)

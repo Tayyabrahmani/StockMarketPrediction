@@ -1,7 +1,6 @@
 import panel as pn
 import param
-from components.StockSelector import StockSelector
-from components.Selectors import ModelSelector
+from components.Selectors import ModelSelector, StockSelector
 from static.config import SIDEBAR_WIDTH
 
 class Sidebar(param.Parameterized):

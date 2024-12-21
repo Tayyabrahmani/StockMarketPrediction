@@ -3,8 +3,7 @@ import panel as pn
 pn.extension('plotly', 'tabulator', 'bootstrap')
 
 import pandas as pd
-from components.StockSelector import StockSelector
-from components.Selectors import ModelSelector
+from components.Selectors import ModelSelector, StockSelector
 from components.Sidebar import Sidebar
 from pages.PageFactory import create_pages
 from templates.layout import create_layout
