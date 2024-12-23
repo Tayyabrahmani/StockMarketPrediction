@@ -2,6 +2,8 @@ import panel as pn
 import param
 import os
 from pathlib import Path
+import os
+from config.model_config import AVAILABLE_MODELS
 
 class StockSelector(param.Parameterized):  
     stock_list = os.listdir(os.path.join(Path(__file__).parents[2], 'Input_Data', 'Processed_Files_Step1'))
@@ -17,16 +19,21 @@ class ModelSelector(param.Parameterized):
     """
     model_selector = param.ListSelector(
         default=["ARIMA"],
-        objects=["MLP", "RNN", "LSTM", "GRU", "CNN", "SVR", "ARIMA", "SARIMA", "Prophet"],
+        objects=AVAILABLE_MODELS,
     )
 
     def view(self):
+        """
+        Returns a Panel view with a MultiChoice widget for selecting models.
+        """
         return pn.Param(
             self.param.model_selector,
             widgets={
-                "model_selector": pn.widgets.MultiSelect(
+                "model_selector": pn.widgets.MultiChoice(
                     name="Select Models",
-                    size=len(self.param.model_selector.objects)
+                    options=self.param.model_selector.objects,
+                    value=self.param.model_selector.default,
+                    placeholder="Choose one or more models...",
                 )
             },
             width=300,

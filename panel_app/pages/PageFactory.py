@@ -6,6 +6,6 @@ def create_pages(stock_selector, model_selector):
     Dynamically creates the application pages.
     """
     return [
-        ('Time Series', create_time_series_page(stock_selector, model_selector.model_selector)),
+        ('Time Series', create_time_series_page(stock_selector, model_selector)),
         ('Metrics', create_metrics_page(stock_selector)),
     ]
