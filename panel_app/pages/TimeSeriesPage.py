@@ -24,6 +24,7 @@ class TimeSeriesPage:
         # Initialize components
         self.time_series_plot = TimeSeriesPlot(
             stock_selector=self.stock_selector,
+            model_selector=self.model_selector,
             prediction_duration=self.prediction_duration
         )
 

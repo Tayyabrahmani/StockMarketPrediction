@@ -4,21 +4,23 @@ import panel as pn
 import param
 import pandas as pd
 import os
-from pathlib import Path
-from components.Selectors import StockSelector
+from pathlib import Path    
+from components.Selectors import StockSelector, ModelSelector
 
 from config.model_config import AVAILABLE_MODELS
 
 class TimeSeriesPlot(param.Parameterized):
-    stock_selector = param.ClassSelector(class_=StockSelector)
+    stock_selector = param.ClassSelector(class_=StockSelector, allow_refs=True)
+    model_selector = param.ClassSelector(class_=ModelSelector, allow_refs=True)
     chart_type = param.Selector(objects=["Line Plot", "Candlestick"], default="Line Plot")
     duration = param.Selector(objects=["1M", "3M", "6M", "1Y", "5Y", "All"], default="All")
     plot_pane = param.ClassSelector(class_=pn.pane.Plotly, default=pn.pane.Plotly())
     prediction_duration = param.ClassSelector(class_=param.Parameterized, allow_None=True, allow_refs=True)
 
-    def __init__(self, stock_selector, prediction_duration, **params):
+    def __init__(self, stock_selector, model_selector, prediction_duration, **params):
         super().__init__(**params)
         self.stock_selector = stock_selector
+        self.model_selector = model_selector
         self.prediction_duration = prediction_duration
         self.prediction_duration_widget = prediction_duration.get_widget()
         self.plot_pane = pn.pane.Plotly(sizing_mode="stretch_width")
@@ -43,6 +45,7 @@ class TimeSeriesPlot(param.Parameterized):
         self.chart_type_selector.param.watch(self._update_chart_type, 'value')
         self.duration_selector.param.watch(self._update_duration, 'value')
         self.include_predictions_checkbox.param.watch(self._update_include_predictions, 'value')
+        self.model_selector.param.watch(self.update_plot, 'model_selector')
 
         # Ensure widgets are initialized before calling update_plot
         self.initialized = False
@@ -64,7 +67,7 @@ class TimeSeriesPlot(param.Parameterized):
             self.update_plot()
 
     @param.depends('stock_selector.stock', 'chart_type', 'duration', watch=True)
-    def update_plot(self):
+    def update_plot(self, event=None):
         # Ensure the widget is initialized before accessing
         if not hasattr(self, 'include_predictions_checkbox'):
             return
@@ -74,7 +77,9 @@ class TimeSeriesPlot(param.Parameterized):
             stock_data = self.load_stock_data(stock_name)
             if stock_data is not None:
                 filtered_data = self.filter_by_duration(stock_data)
-                predictions = self.load_predictions(stock_name) if self.include_predictions_checkbox.value else pd.DataFrame()
+
+                # Only include predictions for selected models
+                predictions = self.load_predictions(stock_name)
                 filtered_predictions = self.filter_predictions(predictions)
 
                 if self.chart_type == "Line Plot":
@@ -101,19 +106,30 @@ class TimeSeriesPlot(param.Parameterized):
             return None
 
     def load_predictions(self, stock_name):
+        if not self.stock_selector or not self.stock_selector.stock:
+            return pd.DataFrame()
+
+        # Get the selected models from the ModelSelector
+        selected_models = self.model_selector.model_selector
+
+        if not selected_models:
+            return pd.DataFrame()
+
         predictions_dir = os.path.join(
             Path(__file__).parents[2],
             "Output_Data",
             "saved_predictions"
         )
         predictions = []
-        for model in AVAILABLE_MODELS:
+
+        for model in selected_models:
             file_path = os.path.join(predictions_dir, f"{model}_{stock_name}_forecast.csv")
             if os.path.exists(file_path):
                 pred_data = pd.read_csv(file_path)
                 pred_data['Model'] = model
                 pred_data['Date'] = pd.to_datetime(pred_data['Date'])
                 predictions.append(pred_data)
+
         combined_predictions = pd.concat(predictions, ignore_index=True) if predictions else pd.DataFrame()
         return combined_predictions
 

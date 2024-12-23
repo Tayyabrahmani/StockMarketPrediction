@@ -83,11 +83,13 @@ class ForecastTable(param.Parameterized):
         for model in models:
             forecast = self.load_forecast(stock_name, model, prediction_days)
             if not forecast.empty:
+                forecast = forecast.rename(columns={col: f"{col}_{model}" if col != "Date" else "Date" for col in forecast.columns})
                 combined_forecasts.append(forecast)
 
         # Combine all model forecasts into a single DataFrame
         if combined_forecasts:
             combined_df = pd.concat(combined_forecasts, axis=1)
+            combined_df = combined_df.loc[:, ~combined_df.columns.duplicated()].copy()
             return combined_df
         return pd.DataFrame()
 
