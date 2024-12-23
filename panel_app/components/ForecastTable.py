@@ -37,8 +37,15 @@ class ForecastTable(param.Parameterized):
         self.model_selector = model_selector
         self.prediction_duration = prediction_duration
 
+        # Add watchers to dynamically update the table on stock or model changes
+        self.stock_selector.param.watch(self.update_table, 'stock')
+        self.model_selector.param.watch(self.update_table, 'model_selector')
+
+        # Initialize the table with data
+        self.update_table()
+
     @param.depends("stock_selector.stock", "model_selector.model_selector", watch=True)
-    def update_table(self):
+    def update_table(self, event=None):
         if self.prediction_duration is None:
             self.result_message = "Prediction duration is not set."
             self._message_pane.object = self.result_message
