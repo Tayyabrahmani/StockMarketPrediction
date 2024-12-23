@@ -44,7 +44,7 @@ class TimeSeriesPlot(param.Parameterized):
         # Link widget updates
         self.chart_type_selector.param.watch(self._update_chart_type, 'value')
         self.duration_selector.param.watch(self._update_duration, 'value')
-        self.include_predictions_checkbox.param.watch(self._update_include_predictions, 'value')
+        self.include_predictions_checkbox.param.watch(self.update_plot, 'value')
         self.model_selector.param.watch(self.update_plot, 'model_selector')
 
         # Ensure widgets are initialized before calling update_plot
@@ -57,10 +57,6 @@ class TimeSeriesPlot(param.Parameterized):
 
     def _update_duration(self, event):
         self.duration = event.new
-
-    def _update_include_predictions(self, event):
-        if self.initialized:
-            self.update_plot()
 
     def _update_prediction_duration(self, event):
         if self.initialized:
@@ -78,9 +74,12 @@ class TimeSeriesPlot(param.Parameterized):
             if stock_data is not None:
                 filtered_data = self.filter_by_duration(stock_data)
 
-                # Only include predictions for selected models
-                predictions = self.load_predictions(stock_name)
-                filtered_predictions = self.filter_predictions(predictions)
+                # Load predictions only if the checkbox is checked
+                if self.include_predictions_checkbox.value:
+                    predictions = self.load_predictions(stock_name)
+                    filtered_predictions = self.filter_predictions(predictions)
+                else:
+                    filtered_predictions = pd.DataFrame()
 
                 if self.chart_type == "Line Plot":
                     self.plot_pane.object = self.create_line_plot(filtered_data, filtered_predictions, stock_name)
