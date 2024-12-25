@@ -62,7 +62,7 @@ class TimeSeriesPlot(param.Parameterized):
         if self.initialized:
             self.update_plot()
 
-    @param.depends('stock_selector.stock', 'chart_type', 'duration', watch=True)
+    @param.depends('stock_selector.stock', 'chart_type', 'duration', 'prediction_duration.prediction_duration', watch=True)
     def update_plot(self, event=None):
         # Ensure the widget is initialized before accessing
         if not hasattr(self, 'include_predictions_checkbox'):
@@ -122,7 +122,7 @@ class TimeSeriesPlot(param.Parameterized):
         predictions = []
 
         for model in selected_models:
-            file_path = os.path.join(predictions_dir, f"{model}_{stock_name}_forecast.csv")
+            file_path = os.path.join(predictions_dir, f"{model}_{stock_name}_predictions.csv")
             if os.path.exists(file_path):
                 pred_data = pd.read_csv(file_path)
                 pred_data['Model'] = model
@@ -158,8 +158,15 @@ class TimeSeriesPlot(param.Parameterized):
             "60 Days": pd.Timedelta(days=60),
             "90 Days": pd.Timedelta(days=90),
         }
-        cutoff_date = pd.Timestamp.now() + duration_mapping[self.prediction_duration.prediction_duration]
-        return predictions[predictions["Date"] <= cutoff_date]
+
+        # Ensure prediction_duration is valid
+        prediction_duration = self.prediction_duration.prediction_duration
+        if prediction_duration not in duration_mapping:
+            return predictions
+
+        cutoff_date = pd.Timestamp.now() + duration_mapping[prediction_duration]
+        filtered_predictions = predictions[predictions["Date"] <= cutoff_date]
+        return filtered_predictions
 
     def create_line_plot(self, stock_data, predictions, stock_name):
         fig = make_subplots(

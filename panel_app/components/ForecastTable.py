@@ -1,4 +1,5 @@
 # forecast_table.py
+import os
 import panel as pn
 import param
 import pandas as pd
@@ -104,7 +105,7 @@ class ForecastTable(param.Parameterized):
         """
         Loads forecast data for a specific stock and model, filtering by prediction duration.
         """
-        file_path = f"{self.base_dir}/{model}_{stock_name}_forecast.csv"
+        file_path = os.path.join(self.base_dir, f"{model}_{stock_name}_predictions.csv")
         try:
             forecast_df = pd.read_csv(file_path)
             if "Date" not in forecast_df or "Predicted Close" not in forecast_df:

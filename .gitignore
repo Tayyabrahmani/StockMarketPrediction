@@ -125,3 +125,8 @@ dmypy.json
 # CSV and Excel files
 *.csv
 *.xlsx
+
+# .png and .pkl files
+*.pkl
+*.png
+*.ipynb
