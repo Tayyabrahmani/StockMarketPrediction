@@ -136,7 +136,7 @@ class XGBoostStockModel:
         })
         prediction_dir = "Output_Data/saved_predictions"
         os.makedirs(prediction_dir, exist_ok=True)
-        prediction_path = os.path.join(prediction_dir, f"XGBoost_{self.stock_name}_forecast.csv")
+        prediction_path = os.path.join(prediction_dir, f"XGBoost_{self.stock_name}_predictions.csv")
         forecast_df.to_csv(prediction_path, index=False)
 
     def run(self):
