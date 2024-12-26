@@ -77,7 +77,7 @@ def evaluate_models(predictions_dir, actual_data_dir):
 
         metrics_list.append({
             "Model": model_name,
-            # "Stock": stock_name,
+            "Stock": stock_name,
             "MAE": mae,
             "RMSE": rmse,
             "R²": r2,

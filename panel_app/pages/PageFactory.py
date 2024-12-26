@@ -7,11 +7,9 @@ def create_pages(stock_selector, model_selector, sidebar):
     """
     # Adjust sidebar visibility
     def create_time_series():
-        sidebar.show_model_selector = True
         return create_time_series_page(stock_selector, model_selector)
 
     def create_metrics():
-        sidebar.show_model_selector = False
         return create_metrics_page(stock_selector)
 
     return [
