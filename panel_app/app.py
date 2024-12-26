@@ -2,7 +2,6 @@ import panel as pn
 # Enable the Panel extension
 pn.extension('plotly', 'tabulator', 'bootstrap')
 
-import pandas as pd
 from components.Selectors import ModelSelector, StockSelector
 from components.Sidebar import Sidebar
 from pages.PageFactory import create_pages
@@ -18,7 +17,7 @@ def run_app():
     sidebar = Sidebar(stock_selector, model_selector)
 
     # Create the pages dynamically
-    tabs = create_pages(stock_selector, model_selector)
+    tabs = create_pages(stock_selector, model_selector, sidebar)
 
     # Create the complete layout
     template = create_layout(sidebar, tabs)

@@ -4,4 +4,4 @@ SCROLLABLE_STYLE = {
     "overflow-y": "scroll",
     "height": "100vh",
 }
-SIDEBAR_WIDTH = 300
+SIDEBAR_WIDTH = 200

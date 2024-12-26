@@ -9,6 +9,7 @@ class Sidebar(param.Parameterized):
     """
     stock_selector = param.ClassSelector(class_=StockSelector)
     model_selector = param.ClassSelector(class_=ModelSelector)
+    show_model_selector = param.Boolean(default=True)
 
     def __init__(self, stock_selector, model_selector, **params):
         super().__init__(**params)
@@ -16,13 +17,14 @@ class Sidebar(param.Parameterized):
         self.model_selector = model_selector      
 
     def view(self):
-        # Sidebar layout
+        model_selector_view = self.model_selector.view() if self.show_model_selector else None
+
         return pn.Column(
             pn.pane.HTML("<div class='sidebar'><h2>Controls</h2></div>"),
             pn.pane.Markdown("### Select Stock"),
             self.stock_selector.view(),
-            pn.pane.Markdown("### Select Forecast Models"),
-            self.model_selector.view(),
+            pn.pane.Markdown("### Select Forecast Models") if model_selector_view else None,
+            model_selector_view,
             width=SIDEBAR_WIDTH,
             margin=0,  # Remove sidebar margin
             sizing_mode="stretch_height"
