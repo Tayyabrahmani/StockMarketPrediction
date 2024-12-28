@@ -164,8 +164,8 @@ class TimeSeriesPlot(param.Parameterized):
         if prediction_duration not in duration_mapping:
             return predictions
 
-        cutoff_date = pd.Timestamp.now() + duration_mapping[prediction_duration]
-        filtered_predictions = predictions[predictions["Date"] <= cutoff_date]
+        cutoff_date = predictions['Date'].max() - duration_mapping[prediction_duration]
+        filtered_predictions = predictions[predictions["Date"] >= cutoff_date]
         return filtered_predictions
 
     def create_line_plot(self, stock_data, predictions, stock_name):
