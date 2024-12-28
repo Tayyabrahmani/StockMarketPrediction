@@ -9,7 +9,7 @@ from machine_learning_models.preprocessing import load_data, preprocess_data_for
 from joblib import Parallel, delayed
 
 class ARIMAStockModel:
-    def __init__(self, file_path, stock_name, max_p=3, max_q=3, test_size=0.05):
+    def __init__(self, file_path, stock_name, max_p=5, max_q=5, test_size=0.05):
         """
         Initializes the ARIMA model for stock prediction.
 
@@ -84,15 +84,14 @@ class ARIMAStockModel:
             start_q=0,
             max_p=self.max_p,
             max_q=self.max_q,
-            d=2,
+            d=None,
             test='adf',
             seasonal=False,
             suppress_warnings=True,
             error_action="ignore",
             trace=True,
             stepwise=True,
-            n_jobs=-1,
-            # n_fits=50,
+            n_fits=50,
             # index=train_data_log.index
         )
 
