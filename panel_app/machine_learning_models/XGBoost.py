@@ -1,13 +1,24 @@
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from machine_learning_models.preprocessing import load_data, create_lagged_features, train_test_split_time_series, fill_na_values
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, make_scorer
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 import xgboost as xgb
 import os
 import pickle
+import optuna
+import shap
+from sklearn.inspection import permutation_importance
+
+def rmse(y_true, y_pred):
+    """
+    Custom RMSE scoring function.
+    """
+    return np.sqrt(mean_squared_error(y_true, y_pred))
+
 
 class XGBoostStockModel:
-    def __init__(self, file_path, stock_name, lags=3, rolling_window=3, test_size=0.2, hyperparameters=None):
+    def __init__(self, file_path, stock_name, hyperparameters=None):
         """
         Initializes the XGBoost model for stock prediction.
 
@@ -21,9 +32,6 @@ class XGBoostStockModel:
         """
         self.file_path = file_path
         self.stock_name = stock_name
-        self.lags = lags
-        self.rolling_window = rolling_window
-        self.test_size = test_size
         self.hyperparameters = hyperparameters or {
             "objective": "reg:squarederror",
             "n_estimators": 100,
@@ -32,73 +40,159 @@ class XGBoostStockModel:
             "random_state": 42
         }
         
-        self.data = self.load_data()
-        self.features, self.target = self.create_features_and_target()
-        self.X_train, self.X_test, self.y_train, self.y_test = self.split_data()
+        # Load data and handle technical indicators
+        self.data = load_data(self.file_path)
+
+        # Create features and target dataframes
+        self.target = self.data["Close"]
+        self.features = create_lagged_features(self.data)
+        self.features = fill_na_values(self.features)
+        self.features = self.features.drop(columns=['Close', 'Stock Name'], errors='ignore')
+    
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(self.features, self.target)
         self.model = None
 
-    def load_data(self):
+    def perform_time_series_cv(self):
         """
-        Loads and preprocesses the stock data.
+        Performs time series cross-validation and calculates RMSE scores.
 
         Returns:
-            pd.DataFrame: The preprocessed stock data.
+            list: RMSE scores for each fold.
         """
-        data = pd.read_csv(self.file_path)
-        data['Exchange Date'] = pd.to_datetime(data['Exchange Date'])
-        data.set_index('Exchange Date', inplace=True)
-        return data
-
-    def create_features_and_target(self):
-        """
-        Creates lag and rolling window features for the data and ensures all features are numeric.
-
-        Returns:
-            tuple: (features, target) DataFrames.
-        """
-        data = self.data.copy()
+        print("Performing time series cross-validation...")
         
-        # Create lag features
-        for lag in range(1, self.lags + 1):
-            data[f'Close_lag_{lag}'] = data['Close'].shift(lag)
+        # Define time series split
+        tscv = TimeSeriesSplit(n_splits=10)
         
-        # Create rolling window features
-        data[f'Close_roll_mean_{self.rolling_window}'] = data['Close'].rolling(window=self.rolling_window).mean()
-        data[f'Close_roll_std_{self.rolling_window}'] = data['Close'].rolling(window=self.rolling_window).std()
+        # Define custom RMSE scorer
+        rmse_scorer = make_scorer(rmse, greater_is_better=False)
 
-        # Drop rows with NaN values
-        data.dropna(inplace=True)
+        # Perform cross-validation
+        scores = cross_val_score(
+            xgb.XGBRegressor(**self.hyperparameters),
+            self.X_train,
+            self.y_train,
+            cv=tscv,
+            scoring=rmse_scorer,
+            n_jobs=-1  # Parallel processing
+        )
 
-        # Ensure only numeric features
-        features = data.drop(columns=['Close'], errors='ignore')
-        features = features.select_dtypes(include=['number'])
+        # Convert negative scores to positive RMSE values
+        rmse_scores = -scores
+        print(f"Time series cross-validation RMSE scores: {rmse_scores}")
+        print(f"Average RMSE: {np.mean(rmse_scores):.4f}")
 
-        # Target variable
-        target = data['Close']
-        return features, target
+        return rmse_scores
 
-    def split_data(self):
+    def select_relevant_features(self, num_features=10, method="shap"):
         """
-        Splits the data into train and test sets.
+        Selects the top `num_features` most relevant features using advanced techniques.
+
+        Parameters:
+            num_features (int): Number of top features to select.
+            method (str): Feature selection method, either "shap" or "permutation".
 
         Returns:
-            tuple: (X_train, X_test, y_train, y_test)
+            None: Updates the `self.features` and re-splits the data.
         """
-        split_index = int(len(self.features) * (1 - self.test_size))
-        X_train = self.features.iloc[:split_index]
-        X_test = self.features.iloc[split_index:]
-        y_train = self.target.iloc[:split_index]
-        y_test = self.target.iloc[split_index:]
-        return X_train, X_test, y_train, y_test
+        preliminary_model = xgb.XGBRegressor(**self.hyperparameters)
+        preliminary_model.fit(self.X_train, self.y_train)
 
-    def train(self):
+        if method == "shap":
+            # Compute SHAP values for feature importance
+            explainer = shap.TreeExplainer(preliminary_model)
+            shap_values = explainer.shap_values(self.X_train)
+            importance = np.abs(shap_values).mean(axis=0)
+        elif method == "permutation":
+            # Use permutation importance for feature ranking
+            perm_importance = permutation_importance(preliminary_model, self.X_train, self.y_train, n_repeats=10, random_state=42)
+            importance = perm_importance.importances_mean
+        else:
+            raise ValueError("Invalid method. Choose 'shap' or 'permutation'.")
+
+        # Select the top `num_features` based on importance
+        important_indices = np.argsort(importance)[-num_features:]
+        selected_features = self.X_train.columns[important_indices]
+
+        # Reduce features to top important ones
+        self.features = self.features[selected_features]
+        print(f"Top {num_features} selected features ({method} method): {selected_features.tolist()}")
+
+        # Re-split the data with reduced features
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
+            self.features, self.target
+        )
+
+    def optimize_hyperparameters(self, n_trials=50):
+        """
+        Uses Optuna to find the best hyperparameters for the XGBoost model.
+
+        Parameters:
+            n_trials (int): Number of trials for the optimization process.
+        
+        Returns:
+            dict: The best hyperparameters found.
+        """
+        def objective(trial):
+            # Define the hyperparameter search space
+            params = {
+                "objective": "reg:squarederror",
+                "n_estimators": trial.suggest_int("n_estimators", 50, 500),
+                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "max_depth": trial.suggest_int("max_depth", 3, 10),
+                "min_child_weight": trial.suggest_float("min_child_weight", 1e-3, 10.0, log=True),
+                "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+                "gamma": trial.suggest_float("gamma", 1e-3, 10.0, log=True),
+                "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
+                "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+                "random_state": 42,
+                "early_stopping_rounds": 10,
+            }
+
+            # Train and validate the model
+            model = xgb.XGBRegressor(**params)
+            model.fit(
+                self.X_train, self.y_train,
+                eval_set=[(self.X_test, self.y_test)],
+                verbose=False
+            )
+            predictions = model.predict(self.X_test)
+            rmse = np.sqrt(mean_squared_error(self.y_test, predictions))
+            return rmse
+
+        # Create an Optuna study
+        study = optuna.create_study(direction="minimize")
+        study.optimize(objective, n_trials=n_trials)
+
+        # Print the best hyperparameters and set them
+        print("Best hyperparameters:", study.best_params)
+        self.hyperparameters = study.best_params
+        return study.best_params
+
+    def train(self, optimize=True, n_trials=50, cross_validate=True, num_features=10):
         """
         Trains the XGBoost model.
 
-        Returns:
-            xgb.XGBRegressor: The trained model.
+        Parameters:
+            optimize (bool): Whether to run hyperparameter optimization before training.
+            n_trials (int): Number of trials for hyperparameter optimization if `optimize` is True.
         """
+        # Select relevant features before training
+        print("Selecting relevant features...")
+        self.select_relevant_features(num_features, method="shap")
+
+        if optimize:
+            print("Optimizing hyperparameters...")
+            self.optimize_hyperparameters(n_trials)
+            print("Optimal hyperparameters found:", self.hyperparameters)
+        
         self.model = xgb.XGBRegressor(**self.hyperparameters)
+
+        if cross_validate:
+            self.perform_time_series_cv()
+
+        print("Training the model on full training data...")
         self.model.fit(self.X_train, self.y_train)
         return self.model
 
@@ -150,24 +244,3 @@ class XGBoostStockModel:
         self.save_model()
         self.save_predictions()
         return metrics
-
-if __name__ == "__main__":
-    # Initialize the model
-    model = XGBoostStockModel(
-        file_path='Input_Data/Processed_Files_Step1/Alphabet Inc.csv',
-        stock_name='Alphabet Inc',
-        lags=5,
-        rolling_window=3,
-        test_size=0.2,
-        hyperparameters={
-            "objective": "reg:squarederror",
-            "n_estimators": 200,
-            "learning_rate": 0.05,
-            "max_depth": 6,
-            "random_state": 42
-        }
-    )
-
-    # Run the full pipeline
-    metrics = model.run()
-    print(f"Final Metrics: {metrics}")
