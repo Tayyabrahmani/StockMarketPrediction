@@ -187,7 +187,7 @@ class ForecastTable(param.Parameterized):
         """
         Loads actual close values for the given stock from the processed input data.
         """
-        file_path = os.path.join("Input_Data/Processed_Files_Step1", f"{stock_name}.csv")
+        file_path = os.path.join("Input_Data/Processed_Files_Step2", f"{stock_name}.csv")
         try:
             actual_df = pd.read_csv(file_path)
             if "Exchange Date" not in actual_df or "Close" not in actual_df:

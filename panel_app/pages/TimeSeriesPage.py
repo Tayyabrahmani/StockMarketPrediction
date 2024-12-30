@@ -65,7 +65,7 @@ class TimeSeriesPage:
             return
 
         # Process data
-        file_path = f"Input_Data/Processed_Files_Step1/{stock_name}.csv"
+        file_path = f"Input_Data/Processed_Files_Step2/{stock_name}.csv"
         if not os.path.exists(file_path):
             pn.state.notifications.error(f"File for stock {stock_name} not found.")
             return
