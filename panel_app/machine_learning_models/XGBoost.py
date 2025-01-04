@@ -68,10 +68,17 @@ class XGBoostStockModel:
         rmse_scorer = make_scorer(rmse, greater_is_better=False)
 
         # Perform cross-validation
+        self.hyperparameters.setdefault("tree_method", "hist")
+        xgb_regressor = xgb.XGBRegressor(**self.hyperparameters)
+
+        # Convert training data to NumPy arrays for compatibility
+        X_train_np = np.asarray(self.X_train)
+        y_train_np = np.asarray(self.y_train)
+
         scores = cross_val_score(
-            xgb.XGBRegressor(**self.hyperparameters),
-            self.X_train,
-            self.y_train,
+            xgb_regressor,
+            X_train_np,
+            y_train_np,
             cv=tscv,
             scoring=rmse_scorer,
             n_jobs=-1  # Parallel processing
@@ -84,7 +91,7 @@ class XGBoostStockModel:
 
         return rmse_scores
 
-    def select_relevant_features(self, num_features=10, method="shap"):
+    def select_relevant_features(self, num_features, method):
         """
         Selects the top `num_features` most relevant features using advanced techniques.
 
