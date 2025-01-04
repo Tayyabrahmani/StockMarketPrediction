@@ -1,15 +1,16 @@
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.stattools import adfuller
+from sklearn.model_selection import TimeSeriesSplit
 from statsmodels.tsa.seasonal import seasonal_decompose
 from pmdarima.arima import auto_arima
 import os
 import pickle
-from machine_learning_models.preprocessing import load_data, preprocess_data_for_arima, train_test_split_time_series
-from joblib import Parallel, delayed
+from machine_learning_models.preprocessing import load_data, preprocess_data_for_arima, train_test_split_time_series, fill_na_values
+from logging_config import get_logger
 
 class ARIMAStockModel:
-    def __init__(self, file_path, stock_name, max_p=5, max_q=5, test_size=0.05):
+    def __init__(self, file_path, stock_name, max_p=5, max_q=5):
         """
         Initializes the ARIMA model for stock prediction.
 
@@ -19,33 +20,45 @@ class ARIMAStockModel:
             forecast_period (int): Number of future periods to forecast.
             max_p (int): Maximum AR parameter for auto_arima.
             max_q (int): Maximum MA parameter for auto_arima.
-            test_size (float): Fraction of the data to use for testing.
         """
+        self.logger = get_logger(__name__)  # Logger specific to this module
+        self.logger.info(f"Initializing ARIMA model for {stock_name}...")
+
         self.file_path = file_path
         self.stock_name = stock_name
         self.max_p = max_p
         self.max_q = max_q
-        self.test_size = test_size
         self.model = None
 
-        # Load raw data
+        # Load data and handle technical indicators
         self.data = load_data(self.file_path)
+        self.data = fill_na_values(self.data)
 
-        # Extract target column (Close) for ARIMA modeling
-        self.target = preprocess_data_for_arima(self.data, target_col='Close')
+        # Use 'Close' as the target and technical indicators as exogenous variables
+        self.exogenous, self.target, self.scaler = preprocess_data_for_arima(self.data, target_col="Close")
 
-        # Convert index and target into numpy arrays for splitting
-        indices = self.data.index.to_numpy().reshape(-1, 1)
-        target_values = self.target.to_numpy()
+        # Split into train/test sets
+        self.train_data, self.test_data, self.train_exog, self.test_exog = self._split_data()
 
-        # Split into train/test sets using preprocessing.py
+    def _split_data(self):
+        """
+        Splits the data into training and testing sets, ensuring the `Close` column is preserved.
+        """
+        if "Close" not in self.data.columns:
+            raise ValueError("The 'Close' column is missing in the dataset.")
+
+        target_values = self.data["Close"].values
         train_indices, test_indices, train_values, test_values = train_test_split_time_series(
-            indices, target_values, test_size=self.test_size
+            self.data.index, target_values
         )
 
-        # Convert train/test splits back to DataFrame for ARIMA compatibility
-        self.train_data = pd.DataFrame(train_values, index=pd.to_datetime(train_indices.flatten()), columns=['Close'])
-        self.test_data = pd.DataFrame(test_values, index=pd.to_datetime(test_indices.flatten()), columns=['Close'])
+        train_exog = self.exogenous.iloc[:len(train_indices)].values if self.exogenous is not None else None
+        test_exog = self.exogenous.iloc[len(train_indices):].values if self.exogenous is not None else None
+
+        train_data = pd.DataFrame(train_values, index=train_indices, columns=["Close"])
+        test_data = pd.DataFrame(test_values, index=test_indices, columns=["Close"])
+
+        return train_data, test_data, train_exog, test_exog
 
     def test_stationarity(self, timeseries):
         """
@@ -60,31 +73,95 @@ class ARIMAStockModel:
               f"p-value = {adft[1]:.4f}\n")
         return adft[1]
 
+    def validate_model(self, n_splits=5):
+        """
+        Performs time-series cross-validation to validate the ARIMA model.
+
+        Parameters:
+            n_splits (int): Number of cross-validation splits.
+
+        Returns:
+            list: RMSE scores for each fold.
+        """
+        self.logger.info("Starting model validation using cross-validation...")
+        
+        tscv = TimeSeriesSplit(n_splits=n_splits)
+        rmse_scores = []
+
+        # Iterate through each fold in cross-validation
+        for fold_idx, (train_index, test_index) in enumerate(tscv.split(self.train_data)):
+            self.logger.info(f"Processing fold {fold_idx + 1}/{n_splits}...")
+
+            # Split the train and test sets for the current fold
+            train_fold = self.train_data.iloc[train_index]
+            test_fold = self.train_data.iloc[test_index]
+
+            exog_train = self.train_exog[train_index] if self.train_exog is not None else None
+            exog_test = self.train_exog[test_index] if self.train_exog is not None else None
+
+            # Log-transform the training data
+            train_fold_log = np.log(train_fold["Close"])
+
+            # Train the ARIMA model on the current fold
+            model = auto_arima(
+                train_fold_log,
+                exogenous=exog_train,
+                start_p=0,
+                start_q=0,
+                max_p=self.max_p,
+                max_q=self.max_q,
+                d=self.differencing_order,
+                seasonal=False,
+                suppress_warnings=True,
+                error_action="ignore",
+                trace=False,
+                stepwise=True,
+            )
+
+            # Predict on the test fold
+            if exog_test is not None:
+                predictions_log = model.predict(n_periods=len(test_fold), X=exog_test)
+            else:
+                predictions_log = model.predict(n_periods=len(test_fold))
+
+            # Transform predictions back to the original scale
+            predictions = np.exp(predictions_log)
+
+            # Calculate RMSE for the current fold
+            rmse = np.sqrt(np.mean((test_fold["Close"].values - predictions) ** 2))
+            rmse_scores.append(rmse)
+
+            self.logger.info(f"Fold {fold_idx + 1}/{n_splits} RMSE: {rmse:.4f}")
+
+        # Log the average RMSE across all folds
+        self.logger.info(f"Cross-validation completed. Average RMSE: {np.mean(rmse_scores):.4f}")
+
+        return rmse_scores
+
     def train(self):
         """
         Trains the ARIMA model on the training data.
         """
-        train_data_log = np.log(self.train_data[['Close']])
+        train_data_log = np.log(self.train_data["Close"])
 
         # Test stationarity
         p_value = self.test_stationarity(train_data_log)
         if p_value > 0.05:
-            differenced_data = train_data_log.diff().dropna()
-            self.test_stationarity(differenced_data)
+            self.differencing_order = 2
+            self.logger.info("Time series is non-stationary. Differencing may be required.")
         else:
-            differenced_data = train_data_log
-
-        # # Ensure the training data has a DatetimeIndex
-        # train_data_log.index = pd.to_datetime(train_data_log.index)
+            self.differencing_order = None
+            self.logger.info("Time series is stationary. Differencing may not be required.")
 
         # Train the ARIMA model
         self.model = auto_arima(
-            differenced_data,
+            train_data_log,
+            exogenous=self.train_exog,
             start_p=0,
             start_q=0,
             max_p=self.max_p,
             max_q=self.max_q,
-            d=None,
+            d=self.differencing_order,
             test='adf',
             seasonal=False,
             suppress_warnings=True,
@@ -97,56 +174,41 @@ class ARIMAStockModel:
 
     def forecast(self):
         """
-        Generates predictions for the entire test data using rolling forecasting.
+        Generates predictions for the entire test data using rolling forecast.
 
         Returns:
             pd.DataFrame: DataFrame containing actual and predicted values for the test data.
         """
+        self.logger.info("Starting forecast...")
         if self.model is None:
-            raise ValueError("Model has not been trained yet. Call `train()` before forecasting.")
+            self.logger.error("Model has not been trained yet. Call `train()` first.")
+            raise ValueError("Model has not been trained yet. Call `train()` first.")
 
-        # Initialize predictions
+        # Initialize predictions and history
         predictions = []
-        history = list(self.train_data['Close'])
-        test_data_log = np.log(self.test_data['Close'])
-        # test_points = list(self.test_data['Close'])
 
-        # Parallelize rolling forecasts
-        # predictions = Parallel(n_jobs=-1)(delayed(self.rolling_forecast)(self.model, history, test) for test in test_points)
+        # Predict for the entire test set
+        if self.test_exog is not None:
+            if len(self.test_exog) != len(self.test_data):
+                self.logger.error("Exogenous variables and test data length mismatch.")
+                raise ValueError("Exogenous variables must align with the length of the test data.")
 
-        # # Rolling forecast for the entire test data
-        # for t in range(len(test_data_log)):
-        #     model = self.model.fit(y=np.log(history))
-        #     forecast = model.predict(n_periods=1)
-        #     forecast_value = np.exp(forecast[0])
-        #     predictions.append(forecast_value)
-        #     history.append(self.test_data['Close'].iloc[t])
+            self.logger.info("Using exogenous variables for forecasting.")
+            predictions_log = self.model.predict(n_periods=len(self.test_data), X=self.test_exog)
+        else:
+            self.logger.info("No exogenous variables provided. Forecasting univariate time series.")
+            predictions_log = self.model.predict(n_periods=len(self.test_data))
 
-        # Rolling forecast for the test data
-        for actual_value in self.test_data['Close']:
-            # Fit the model on the current history
-            fitted_model = self.model.fit(y=np.log(history))
-
-            # Forecast the next value
-            forecast = fitted_model.predict(n_periods=1)
-            forecast_value = np.exp(forecast[0])
-            predictions.append(forecast_value)
-
-            # Append the actual value to history for the next step
-            history.append(actual_value)
+        # Transform back to original scale (from log if applicable)
+        predictions = np.exp(predictions_log.values)
 
         # Create a DataFrame of actual vs predicted values
         forecast_df = pd.DataFrame({
             "Date": self.test_data.index,
-            "Predicted Close": predictions
+            "Predicted Close": predictions,
         })
-        return forecast_df
 
-    # def rolling_forecast(self, model, history, test_point):
-    #     fitted_model = model.fit(y=np.log(history))
-    #     forecast = fitted_model.predict(n_periods=1)
-    #     forecast_value = np.exp(forecast[0])
-    #     return forecast_value
+        return forecast_df
 
     def save_model(self):
         """
@@ -176,25 +238,10 @@ class ARIMAStockModel:
         saves the model and predictions.
         """
         print(f"Training ARIMA model for {self.stock_name}...")
-        self.test_stationarity(self.train_data["Close"])
         self.train()
+        self.validate_model()
         forecast_df = self.forecast()
         self.save_model()
         self.save_predictions(forecast_df)
         print(f"ARIMA model and predictions saved for {self.stock_name}.")
         return forecast_df
-
-# if __name__ == "__main__":
-#     # Initialize the ARIMA model
-#     arima_model = ARIMAStockModel(
-#         file_path='Input_Data/Processed_Files_Step1/Alphabet Inc.csv',
-#         stock_name='Alphabet Inc',
-#         forecast_period=60,
-#         max_p=3,
-#         max_q=3,
-#         test_size=0.2
-#     )
-
-#     # Run the ARIMA pipeline
-#     forecast = arima_model.run()
-#     print(f"Forecast Results:\n{forecast}")
