@@ -20,7 +20,10 @@ def load_data(file_path):
         data.set_index('Exchange Date', inplace=True)
         if 'Close' not in data.columns:
             raise ValueError(f"'Close' column is missing in the input data: {file_path}")
-        return data[['Close']]  # Only return the 'Close' column
+        
+        # Remove columns which have similar value as the target variable
+        data = data.drop(['Open', 'Low', 'High', 'Volume', 'Flow', 'Turnover - USD'], axis=1)
+        return data
     except Exception as e:
         raise ValueError(f"Error loading data from {file_path}: {e}")
 
@@ -42,9 +45,19 @@ def create_lagged_features(df, target_col='Close', lags=3, rolling_window=None):
     if rolling_window:
         df[f"{target_col}_roll_mean"] = df[target_col].rolling(window=rolling_window).mean()
         df[f"{target_col}_roll_std"] = df[target_col].rolling(window=rolling_window).std()
-    df.dropna(inplace=True)
     return df
 
+def fill_na_values(df):
+    """
+    Fills NaN values in the dataframe using forward fill (ffill).
+
+    Parameters:
+        df (pd.DataFrame): The input dataframe.
+    
+    Returns:
+        pd.DataFrame: DataFrame with NaN values filled using forward fill.
+    """
+    return df.ffill().bfill()
 
 def preprocess_data(df, target_col='Close', sequence_length=30):
     """
@@ -79,9 +92,24 @@ def preprocess_data_for_arima(df, target_col='Close'):
     """
     if target_col not in df.columns:
         raise ValueError(f"Target column '{target_col}' not found in the dataframe.")
-    return df[target_col]
 
-def train_test_split_time_series(X, y, test_size=0.05):
+    # Extract the target column as a Series
+    target_series = df[target_col]
+
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    exog_cols = numeric_cols.drop([target_col], errors="ignore")
+    if len(exog_cols) == 0:
+        raise ValueError("No exogenous numeric columns found for preprocessing.")
+
+    exogenous = df[exog_cols]
+
+    # Scale exogenous variables
+    scaler = MinMaxScaler()
+    exogenous_scaled = scaler.fit_transform(exogenous)
+    exogenous_scaled_df  = pd.DataFrame(exogenous_scaled, columns=exog_cols)
+    return exogenous_scaled_df, target_series, scaler
+
+def train_test_split_time_series(X, y, test_size=0.02):
     """
     Splits the data into training and testing sets.
 
