@@ -82,6 +82,8 @@ def process_all_stocks(input_dir, output_dir):
             # Add technical indicators
             df = add_technical_indicators(df)
 
+            df = df.rename(columns={"Date": "Exchange Date"})
+
             # Save enhanced data
             output_file = output_path / stock_file.name
             df.to_csv(output_file, index=False)
