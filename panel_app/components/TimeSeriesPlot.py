@@ -95,7 +95,7 @@ class TimeSeriesPlot(param.Parameterized):
             file_path = os.path.join(
                 Path(__file__).parents[2],
                 "Input_Data",
-                "Processed_Files_Step1",
+                "Processed_Files_Step2",
                 f"{stock_name}.csv"
             )
             stock_data = pd.read_csv(file_path)
@@ -235,6 +235,90 @@ class TimeSeriesPlot(param.Parameterized):
             height=450,
             margin=dict(l=20, r=20, t=80, b=20),
         )
+        return fig
+
+    def create_candlestick_plot(self, stock_data, stock_name):
+        """
+        Creates a candlestick chart with a volume subplot.
+
+        Parameters:
+            stock_data (pd.DataFrame): DataFrame containing the stock data. 
+                                    Must have 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'.
+            stock_name (str): Name of the stock.
+
+        Returns:
+            go.Figure: A Plotly candlestick chart with volume subplot.
+        """
+        # Create subplots with shared x-axis
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.1,
+            row_heights=[0.7, 0.3]
+        )
+
+        # Add candlestick chart to the first row
+        fig.add_trace(
+            go.Candlestick(
+                x=stock_data['Exchange Date'],
+                open=stock_data['Open'],
+                high=stock_data['High'],
+                low=stock_data['Low'],
+                close=stock_data['Close'],
+                increasing_line_color='green',
+                decreasing_line_color='red',
+                name="Candlestick",
+                hovertext=[
+                    f"Date: {row['Exchange Date']}<br>Open: {row['Open']}<br>High: {row['High']}<br>"
+                    f"Low: {row['Low']}<br>Close: {row['Close']}"
+                    for _, row in stock_data.iterrows()
+                ],
+                hoverinfo="text",
+            ),
+            row=1, col=1
+        )
+
+        # Add volume bar chart to the second row
+        fig.add_trace(
+            go.Bar(
+                x=stock_data['Exchange Date'],
+                y=stock_data['Volume'],
+                name="Volume",
+                marker=dict(color="gray"),
+                hovertext=[
+                    f"Date: {row['Exchange Date']}<br>Volume: {row['Volume']}"
+                    for _, row in stock_data.iterrows()
+                ],
+                hoverinfo="text",
+            ),
+            row=2, col=1
+        )
+
+        # Update layout with consistent formatting
+        fig.update_layout(
+            title={
+                "text": f"<b>Candlestick Chart and Volume for {stock_name}</b>",
+                "y": 0.95,
+                "x": 0.5,
+                "xanchor": "center",
+                "yanchor": "top",
+                "font": dict(size=15, family="Arial, sans-serif", color="Black")
+            },
+            xaxis_rangeslider_visible=False,
+            xaxis=dict(title="Date", showgrid=True, gridcolor="LightGray"),
+            yaxis=dict(title="Price (USD)", showgrid=True, gridcolor="LightGray"),
+            xaxis2=dict(title="Date"),
+            yaxis2=dict(
+                title="Volume",
+                range=[0, stock_data["Volume"].max() * 1.1],
+                showgrid=True,
+                gridcolor="LightGray"
+            ),
+            template="plotly_white",
+            height=450,
+            margin=dict(l=20, r=20, t=80, b=20),
+        )
+
         return fig
 
     def get_component(self):
