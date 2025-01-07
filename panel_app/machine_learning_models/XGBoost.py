@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from machine_learning_models.preprocessing import load_data, create_lagged_features, train_test_split_time_series, fill_na_values
+from machine_learning_models.preprocessing import load_data, create_lagged_features, train_test_split_time_series, fill_na_values, extract_date_features
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, make_scorer
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 import xgboost as xgb
@@ -39,7 +39,7 @@ class XGBoostStockModel:
             "max_depth": 5,
             "random_state": 42
         }
-        
+
         # Load data and handle technical indicators
         self.data = load_data(self.file_path)
 
@@ -47,7 +47,8 @@ class XGBoostStockModel:
         self.target = self.data["Close"]
         self.features = create_lagged_features(self.data)
         self.features = fill_na_values(self.features)
-        self.features = self.features.drop(columns=['Close', 'Stock Name'], errors='ignore')
+        self.features = extract_date_features(self.features)
+        self.features = self.features.drop(columns=['Close'], errors='ignore')
     
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(self.features, self.target)
         self.model = None
@@ -177,7 +178,7 @@ class XGBoostStockModel:
         self.hyperparameters = study.best_params
         return study.best_params
 
-    def train(self, optimize=True, n_trials=50, cross_validate=True, num_features=10):
+    def train(self, optimize=True, n_trials=50, cross_validate=True, num_features=30):
         """
         Trains the XGBoost model.
 
@@ -193,7 +194,7 @@ class XGBoostStockModel:
             print("Optimizing hyperparameters...")
             self.optimize_hyperparameters(n_trials)
             print("Optimal hyperparameters found:", self.hyperparameters)
-        
+
         self.model = xgb.XGBRegressor(**self.hyperparameters)
 
         if cross_validate:
