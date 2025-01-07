@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
-
+lags = [1, 2, 3, 7, 14, 28]
 
 def load_data(file_path):
     """
@@ -27,7 +27,7 @@ def load_data(file_path):
     except Exception as e:
         raise ValueError(f"Error loading data from {file_path}: {e}")
 
-def create_lagged_features(df, target_col='Close', lags=3, rolling_window=None):
+def create_lagged_features(df, target_col='Close', lags=lags, rolling_window=None):
     """
     Creates lagged and rolling window features for time-series data.
 
@@ -40,7 +40,7 @@ def create_lagged_features(df, target_col='Close', lags=3, rolling_window=None):
     Returns:
         pd.DataFrame: Data with lagged and rolling window features.
     """
-    for lag in range(1, lags + 1):
+    for lag in lags:
         df[f"{target_col}_lag_{lag}"] = df[target_col].shift(lag)
     if rolling_window:
         df[f"{target_col}_roll_mean"] = df[target_col].rolling(window=rolling_window).mean()
