@@ -95,7 +95,7 @@ class TimeSeriesPlot(param.Parameterized):
             file_path = os.path.join(
                 Path(__file__).parents[2],
                 "Input_Data",
-                "Processed_Files_Step2",
+                "Processed_Files_Step1",
                 f"{stock_name}.csv"
             )
             stock_data = pd.read_csv(file_path)

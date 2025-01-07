@@ -151,7 +151,7 @@ def predict_and_inverse_transform(model, X, scaler, feature_dim):
 if __name__ == "__main__":
     # Define paths
     predictions_dir = "Output_Data/saved_predictions"
-    actual_data_dir = "Input_Data/Processed_Files_Step2"
+    actual_data_dir = "Input_Data/Processed_Files_Step1"
 
     # Evaluate models and generate metrics table
     metrics_df = evaluate_models(predictions_dir, actual_data_dir)
