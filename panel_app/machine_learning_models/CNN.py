@@ -8,66 +8,67 @@ from machine_learning_models.preprocessing import (
     create_lagged_features,
     preprocess_data,
     train_test_split_time_series,
-    fill_na_values
+    fill_na_values,
+    extract_date_features
 )
 from machine_learning_models.evaluation import predict_and_inverse_transform
-
+import torch.nn.functional as F
+from torch.optim.lr_scheduler import ReduceLROnPlateau
+import optuna
 
 class CNN(nn.Module):
-    def __init__(self, input_dim, sequence_length):
+    def __init__(self, input_dim, sequence_length, num_filters=64, dropout_rate=0.2):
         super(CNN, self).__init__()
 
-        # Convolutional layers
-        self.conv1 = nn.Conv1d(in_channels=input_dim, out_channels=8, kernel_size=2, padding=1)
-        self.elu1 = nn.ELU()
-        self.conv2 = nn.Conv1d(in_channels=8, out_channels=16, kernel_size=2, padding=1)
-        self.elu2 = nn.ELU()
-        self.conv3 = nn.Conv1d(in_channels=16, out_channels=32, kernel_size=2, padding=1)
-        self.elu3 = nn.ELU()
-
-        # Calculate the flattened size dynamically
-        self._compute_flattened_size(sequence_length)
+        # Convolutional layers with residual connections
+        self.conv1 = nn.Conv1d(in_channels=input_dim, out_channels=num_filters, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm1d(num_filters)
+        self.conv2 = nn.Conv1d(in_channels=num_filters, out_channels=num_filters * 2, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm1d(num_filters * 2)
+        self.conv3 = nn.Conv1d(in_channels=num_filters * 2, out_channels=num_filters * 4, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm1d(num_filters * 4)
+        self.dropout = nn.Dropout(dropout_rate)
 
         # Fully connected layers
-        self.fc1 = nn.Linear(self.flattened_size, 32)
-        self.relu1 = nn.ReLU()
-        self.fc2 = nn.Linear(32, 16)
-        self.relu2 = nn.ReLU()
-        self.fc3 = nn.Linear(16, 8)
-        self.relu3 = nn.ReLU()
-        self.fc4 = nn.Linear(8, 4)
-        self.relu4 = nn.ReLU()
-        self.output = nn.Linear(4, 1)
-
-    def _compute_flattened_size(self, sequence_length):
-        """
-        Computes the flattened size after convolution layers.
-        """
-        sample_input = torch.zeros(1, self.conv1.in_channels, sequence_length)  # Match in_channels
-        x = self.elu1(self.conv1(sample_input))
-        x = self.elu2(self.conv2(x))
-        x = self.elu3(self.conv3(x))
-        self.flattened_size = x.view(1, -1).size(1)
+        self.flattened_size = num_filters * 4 * sequence_length
+        self.fc1 = nn.Linear(self.flattened_size, 128)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 1)
 
     def forward(self, x):
-        x = x.permute(0, 2, 1)  # Permute to match Conv1D input
-        x = self.elu1(self.conv1(x))
-        x = self.elu2(self.conv2(x))
-        x = self.elu3(self.conv3(x))
-        x = x.view(x.size(0), -1)  # Flatten
-        x = self.relu1(self.fc1(x))
-        x = self.relu2(self.fc2(x))
-        x = self.relu3(self.fc3(x))
-        x = self.relu4(self.fc4(x))
-        return self.output(x)
+        batch_size = x.size(0)
+
+        # CNN Feature Extraction
+        x = x.permute(0, 2, 1).contiguous()  # Ensure contiguous memory layout after permute
+        residual = x.reshape(batch_size, -1)  # Flatten input for residual connection
+
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = self.dropout(x)
+
+        # Flatten for fully connected layers
+        x = x.reshape(batch_size, -1)
+
+        # Align residual dimensions
+        if residual.size(1) != x.size(1):
+            residual = nn.Linear(residual.size(1), x.size(1)).to(x.device)(residual)
+
+        # Residual connection
+        x += residual
+
+        # Fully connected layers
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+
+        return x
 
 class CNNStockModel:
-    def __init__(self, file_path, stock_name, hyperparameters=None):
+    def __init__(self, file_path, stock_name):
         self.file_path = file_path
         self.stock_name = stock_name
-        self.hyperparameters = hyperparameters or {"num_filters": 16, "learning_rate": 0.001, "epochs": 10}
         self.model = None
-        self.scaler = None
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
@@ -75,11 +76,70 @@ class CNNStockModel:
         # Create lagged features
         self.data = create_lagged_features(self.data, target_col="Close")
         self.data = fill_na_values(self.data)
+        self.data = extract_date_features(self.data)
 
         self.features, self.target, self.scaler = preprocess_data(self.data, target_col="Close")
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
+
+    def objective(self, trial):
+        # Suggest hyperparameters for Optuna to tune
+        num_filters = trial.suggest_categorical("num_filters", [16, 32, 64])
+        dropout_rate = trial.suggest_float("dropout_rate", 0.1, 0.5)
+        learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+        epochs = trial.suggest_int("epochs", 10, 30)
+
+        # Initialize and train the model
+        sequence_length = self.features.shape[1]
+        input_dim = self.X_train.shape[2]
+        model = CNN(input_dim=input_dim, sequence_length=sequence_length, dropout_rate=dropout_rate)
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        criterion = nn.MSELoss()
+
+        X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
+        y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32).unsqueeze(-1)
+        train_dataset = torch.utils.data.TensorDataset(X_train_tensor, y_train_tensor)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+
+        # Training loop
+        model.train()
+        for epoch in range(epochs):
+            epoch_loss = 0
+            for X_batch, y_batch in train_loader:
+                optimizer.zero_grad()
+                predictions = model(X_batch)
+                loss = criterion(predictions, y_batch)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+
+        # Validation loss calculation
+        model.eval()
+        with torch.no_grad():
+            X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32)
+            y_test_tensor = torch.tensor(self.y_test, dtype=torch.float32).unsqueeze(-1)
+            predictions = model(X_test_tensor)
+            val_loss = criterion(predictions, y_test_tensor).item()
+
+        return val_loss
+
+    def run_tuning(self, n_trials=15, update_optuna_study=False):
+        if not update_optuna_study:
+            return
+
+        # Define a pruner for early stopping of unpromising trials
+        pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3)
+
+        # Create the Optuna study with the pruner
+        study = optuna.create_study(direction="minimize", pruner=pruner)
+
+        # Optimize the study
+        study.optimize(self.objective, n_trials=n_trials)
+
+        print("Best hyperparameters:", study.best_params)
+        print("Best validation loss:", study.best_value)
+        return study.best_params
 
     def build_model(self, input_dim, sequence_length):
         """
@@ -98,7 +158,7 @@ class CNNStockModel:
         )
         return self.model
 
-    def train(self):
+    def train(self, learning_rate=1e-3, epochs=10, batch_size=32):
         """
         Trains the CNN model.
         """
@@ -109,14 +169,15 @@ class CNNStockModel:
         X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
         y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32).unsqueeze(-1)
         train_dataset = torch.utils.data.TensorDataset(X_train_tensor, y_train_tensor)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
         # Define loss and optimizer
-        criterion = nn.MSELoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
+        criterion = nn.HuberLoss()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
+        scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
 
         # Training loop
-        for epoch in range(self.hyperparameters["epochs"]):
+        for epoch in range(epochs):
             self.model.train()
             epoch_loss = 0
             for X_batch, y_batch in train_loader:
@@ -126,23 +187,29 @@ class CNNStockModel:
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
-            print(f"Epoch {epoch + 1}/{self.hyperparameters['epochs']}, Loss: {epoch_loss / len(train_loader):.4f}")
+
+            avg_loss = epoch_loss / len(train_loader)
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
+            scheduler.step(avg_loss)
 
     def predict(self):
         """
-        Generates predictions for the test data.
-
-        Returns:
-            np.array: Predicted values for the test data.
+        Predicts using the trained EnhancedCNN model.
         """
-        sequence_length = self.features.shape[1]
-        predictions = predict_and_inverse_transform(
-            self.model,
-            self.X_test,
+        if self.model is None:
+            raise ValueError("Model is not initialized. Build and train the model before predicting.")
+
+        self.model.eval()
+        with torch.no_grad():
+            X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32)
+            predictions = self.model(X_test_tensor).numpy()  # Generate predictions
+
+        return predict_and_inverse_transform(
+            model=self.model,
+            X=self.X_test,
             scaler=self.scaler,
-            feature_dim=self.X_test.shape[2],
+            feature_dim=self.X_test.shape[2]
         )
-        return predictions
 
     def save_model(self):
         """
@@ -176,11 +243,29 @@ class CNNStockModel:
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
+        # best_params = self.run_tuning(update_optuna_study=False)
+        best_params = {'num_filters': 32, 'dropout_rate': 0.20815363258412045, 'learning_rate': 0.0005816740646783397, 'epochs': 30}
+        print(f"Best parameters found: {best_params}")
+
         sequence_length = self.features.shape[1]
         input_dim = self.X_train.shape[2]
-        self.build_model(input_dim=input_dim, sequence_length=sequence_length)
-        self.train()
+
+        self.model = CNN(input_dim=input_dim,
+                         sequence_length=sequence_length,
+                         num_filters=best_params["num_filters"],
+                         dropout_rate=best_params["dropout_rate"],
+        )
+
+        print("Training model...")
+        self.train(learning_rate=best_params["learning_rate"], epochs=best_params["epochs"])
+
+        print("Generating predictions...")
         predictions = self.predict()
-        self.save_model()
+
+        print("Saving predictions...")
         self.save_predictions(predictions)
-        return predictions                                                                                                     
+
+        print("Saving the model...")
+        self.save_model()
+        
+        return predictions
