@@ -22,7 +22,7 @@ def load_data(file_path):
             raise ValueError(f"'Close' column is missing in the input data: {file_path}")
         
         # Remove columns which have similar value as the target variable
-        data = data.drop(['Open', 'Low', 'High', 'Volume', 'Flow', 'Turnover - USD'], axis=1)
+        data = data.drop(['Open', 'Low', 'High', 'Volume', 'Flow', 'Turnover - USD', 'Stock Name'], axis=1)
         return data
     except Exception as e:
         raise ValueError(f"Error loading data from {file_path}: {e}")
@@ -45,6 +45,40 @@ def create_lagged_features(df, target_col='Close', lags=3, rolling_window=None):
     if rolling_window:
         df[f"{target_col}_roll_mean"] = df[target_col].rolling(window=rolling_window).mean()
         df[f"{target_col}_roll_std"] = df[target_col].rolling(window=rolling_window).std()
+    return df
+
+def extract_date_features(df, date_column='Exchange Date'):
+    """
+    Extracts date-based features from a datetime column.
+
+    Parameters:
+        df (pd.DataFrame): The input dataframe.
+        date_column (str): Name of the datetime column.
+    
+    Returns:
+        pd.DataFrame: DataFrame with additional date-based features.
+    """
+    df = df.reset_index()
+    if date_column not in df.columns:
+        raise ValueError(f"Date column '{date_column}' not found in the dataframe.")
+    
+    # Ensure the date column is in datetime format
+    df[date_column] = pd.to_datetime(df[date_column], errors='coerce')
+    if df[date_column].isnull().any():
+        raise ValueError(f"Date column '{date_column}' contains invalid datetime entries.")
+    
+    # Extract features
+    df['Year'] = df[date_column].dt.year
+    df['Month'] = df[date_column].dt.month
+    df['Day'] = df[date_column].dt.day
+    df['DayOfWeek'] = df[date_column].dt.dayofweek
+    df['WeekOfYear'] = df[date_column].dt.isocalendar().week
+    df['Quarter'] = df[date_column].dt.quarter
+    df['IsMonthStart'] = df[date_column].dt.is_month_start.astype(int)
+    df['IsMonthEnd'] = df[date_column].dt.is_month_end.astype(int)
+    df['IsWeekend'] = (df[date_column].dt.dayofweek >= 5).astype(int)
+    
+    df = df.set_index('Exchange Date')
     return df
 
 def fill_na_values(df):
@@ -71,6 +105,8 @@ def preprocess_data(df, target_col='Close', sequence_length=30):
     Returns:
         tuple: Scaled features (X), target (y), and fitted scaler.
     """
+    df = df[[col for col in df.columns if col != target_col] + [target_col]]
+
     scaler = MinMaxScaler()
     scaled_data = scaler.fit_transform(df)
     X, y = [], []
