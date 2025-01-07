@@ -1,1 +1,1 @@
-AVAILABLE_MODELS = ["ARIMA", "XGBoost", "SARIMA", "Prophet", "LSTM", "GRU", "MLP", "CNN", "RNN", "SVR", "Transformers"]
+AVAILABLE_MODELS = ["ARIMA", "XGBoost", "CNN", "LSTM", "GRU", "MLP", "RNN", "SVR", "Transformers"]
