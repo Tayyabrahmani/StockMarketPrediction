@@ -7,6 +7,7 @@ from machine_learning_models.preprocessing import (
     load_data,
     create_lagged_features,
     preprocess_data,
+    create_sequences,
     train_test_split_time_series,
     fill_na_values,
     extract_date_features
@@ -39,7 +40,7 @@ class CNN(nn.Module):
         batch_size = x.size(0)
 
         # CNN Feature Extraction
-        x = x.permute(0, 2, 1).contiguous()  # Ensure contiguous memory layout after permute
+        x = x.permute(0, 2, 1).contiguous()
         residual = x.reshape(batch_size, -1)  # Flatten input for residual connection
 
         x = F.relu(self.bn1(self.conv1(x)))
@@ -78,10 +79,11 @@ class CNNStockModel:
         self.data = fill_na_values(self.data)
         self.data = extract_date_features(self.data)
 
-        self.features, self.target, self.scaler = preprocess_data(self.data, target_col="Close")
+        X, y = create_sequences(self.data, sequence_length=30, target_col="Close")
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
-            self.features, self.target
+            X, y
         )
+        self.X_train, self.X_test, self.scaler = preprocess_data(self.X_train, self.X_test)
 
     def objective(self, trial):
         # Suggest hyperparameters for Optuna to tune
@@ -91,7 +93,7 @@ class CNNStockModel:
         epochs = trial.suggest_int("epochs", 10, 30)
 
         # Initialize and train the model
-        sequence_length = self.features.shape[1]
+        sequence_length = self.X_train.shape[1]
         input_dim = self.X_train.shape[2]
         model = CNN(input_dim=input_dim, sequence_length=sequence_length, dropout_rate=dropout_rate)
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -141,30 +143,10 @@ class CNNStockModel:
         print("Best validation loss:", study.best_value)
         return study.best_params
 
-    def build_model(self, input_dim, sequence_length):
-        """
-        Builds the CNN model with updated architecture.
-
-        Parameters:
-            input_dim (int): Number of input features.
-            sequence_length (int): Length of the input sequence.
-
-        Returns:
-            CNN: The initialized CNN model.
-        """
-        self.model = CNN(
-            input_dim=input_dim,
-            sequence_length=sequence_length,
-        )
-        return self.model
-
     def train(self, learning_rate=1e-3, epochs=10, batch_size=32):
         """
         Trains the CNN model.
         """
-        if self.model is None:
-            raise ValueError("Model has not been built. Call build_model() before training.")
-
         # Prepare data for PyTorch DataLoader
         X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
         y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32).unsqueeze(-1)
@@ -202,14 +184,17 @@ class CNNStockModel:
         self.model.eval()
         with torch.no_grad():
             X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32)
-            predictions = self.model(X_test_tensor).numpy()  # Generate predictions
+            predictions = self.model(X_test_tensor).numpy()
 
-        return predict_and_inverse_transform(
-            model=self.model,
-            X=self.X_test,
-            scaler=self.scaler,
-            feature_dim=self.X_test.shape[2]
-        )
+        predictions_reshaped = predictions.reshape(-1, 1)
+        return predictions
+
+        # return predict_and_inverse_transform(
+        #     model=self.model,
+        #     X=predictions_reshaped,
+        #     scaler=self.scaler,
+        #     feature_dim=self.X_test.shape[2]
+        # )
 
     def save_model(self):
         """
@@ -244,10 +229,10 @@ class CNNStockModel:
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
         # best_params = self.run_tuning(update_optuna_study=False)
-        best_params = {'num_filters': 32, 'dropout_rate': 0.20815363258412045, 'learning_rate': 0.0005816740646783397, 'epochs': 30}
+        best_params = {'num_filters': 32, 'dropout_rate': 0.20815363258412045, 'learning_rate': 0.0005816740646783397, 'epochs': 1}
         print(f"Best parameters found: {best_params}")
 
-        sequence_length = self.features.shape[1]
+        sequence_length = self.X_train.shape[1]
         input_dim = self.X_train.shape[2]
 
         self.model = CNN(input_dim=input_dim,

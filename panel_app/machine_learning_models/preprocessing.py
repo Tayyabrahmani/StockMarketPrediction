@@ -93,7 +93,7 @@ def fill_na_values(df):
     """
     return df.ffill().bfill()
 
-def preprocess_data(df, target_col='Close', sequence_length=30):
+def preprocess_data(X_train, X_test):
     """
     Prepares data for training by creating sequences and scaling.
 
@@ -105,15 +105,33 @@ def preprocess_data(df, target_col='Close', sequence_length=30):
     Returns:
         tuple: Scaled features (X), target (y), and fitted scaler.
     """
-    df = df[[col for col in df.columns if col != target_col] + [target_col]]
-
     scaler = MinMaxScaler()
-    scaled_data = scaler.fit_transform(df)
+    X_train_scaled = scaler.fit_transform(X_train.reshape(-1, X_train.shape[-1]))
+    X_test_scaled = scaler.transform(X_test.reshape(-1, X_test.shape[-1]))
+
+    # Reshape scaled data back to original dimensions
+    X_train_scaled = X_train_scaled.reshape(X_train.shape)
+    X_test_scaled = X_test_scaled.reshape(X_test.shape)
+
+    return X_train_scaled, X_test_scaled, scaler
+
+def create_sequences(df, sequence_length, target_col="Close"):
+    """
+    Creates sequences from the data for time series forecasting.
+
+    Parameters:
+        data (np.array): The scaled data.
+        sequence_length (int): Number of time steps for sequences.
+    
+    Returns:
+        tuple: Features (X) and target (y) sequences.
+    """
+    df = df[[col for col in df.columns if col != target_col] + [target_col]].values
     X, y = [], []
-    for i in range(len(scaled_data) - sequence_length):
-        X.append(scaled_data[i:i + sequence_length, :-1])
-        y.append(scaled_data[i + sequence_length, -1])
-    return np.array(X), np.array(y), scaler
+    for i in range(len(df) - sequence_length):
+        X.append(df[i:i + sequence_length, :-1])
+        y.append(df[i + sequence_length, -1])
+    return np.array(X), np.array(y)
 
 def preprocess_data_for_arima(df, target_col='Close'):
     """
