@@ -54,7 +54,7 @@ class RNNStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             X, y
         )
-        self.X_train, self.X_test, self.scaler = preprocess_data(self.X_train, self.X_test)
+        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test)
 
     def build_model(self, input_dim, hidden_dim, num_layers, dropout):
         """
@@ -129,7 +129,9 @@ class RNNStockModel:
         with torch.no_grad():
             predictions = self.model(X_test_tensor).cpu().numpy()
 
-        return predictions
+        predictions_original_scale = self.target_scaler.inverse_transform(predictions.reshape(-1, 1))
+        
+        return predictions_original_scale.flatten()
 
         # predictions = predict_and_inverse_transform(
         #     model=self.model,
@@ -163,7 +165,7 @@ class RNNStockModel:
         # Save actual vs predicted values
         prediction_df = pd.DataFrame({
             "Date": pd.to_datetime(self.data.index[-len(predictions):]),
-            "Predicted Close": predictions.flatten(),
+            "Predicted Close": predictions,
         })
         prediction_df.to_csv(prediction_path, index=False)
 

@@ -50,7 +50,6 @@ class LSTMStockModel:
         self.file_path = file_path
         self.stock_name = stock_name
         self.model = None
-        self.scaler = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load and preprocess data
@@ -65,7 +64,7 @@ class LSTMStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             X, y
         )
-        self.X_train, self.X_test, self.scaler = preprocess_data(self.X_train, self.X_test)
+        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test)
 
     def build_model(self, input_dim, hidden_dim):
         """
@@ -131,10 +130,10 @@ class LSTMStockModel:
 
     def predict(self):
         """
-        Generates predictions for the test data and inverse transforms them to the original scale.
+        Generates predictions for the test data and inverse transforms them.
 
         Returns:
-            np.array: Predicted values for the test data in the original scale.
+            np.array: Predictions in the original scale.
         """
         self.model.eval()
 
@@ -144,7 +143,9 @@ class LSTMStockModel:
         with torch.no_grad():
             predictions = self.model(X_test_tensor).cpu().numpy()
 
-        return predictions
+        predictions_original_scale = self.target_scaler.inverse_transform(predictions.reshape(-1, 1))
+        
+        return predictions_original_scale.flatten()
 
     def save_model(self):
         """
@@ -170,7 +171,7 @@ class LSTMStockModel:
         # Save actual vs predicted values
         prediction_df = pd.DataFrame({
             "Date": pd.to_datetime(self.data.index[-len(predictions):]),
-            "Predicted Close": predictions.flatten(),
+            "Predicted Close": predictions,
         })
         prediction_df.to_csv(prediction_path, index=False)
 
