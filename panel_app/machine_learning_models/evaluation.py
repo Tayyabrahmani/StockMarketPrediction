@@ -1,4 +1,5 @@
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, explained_variance_score
+from statsmodels.stats.stattools import durbin_watson
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
@@ -20,7 +21,11 @@ def evaluate_predictions(y_true, y_pred):
     mae = mean_absolute_error(y_true, y_pred)
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     r2 = r2_score(y_true, y_pred)
-    return {"MAE": mae, "RMSE": rmse, "R²": r2}
+    smape = np.mean(2 * np.abs(y_true - y_pred) / (np.abs(y_true) + np.abs(y_pred))) * 100
+    evs = explained_variance_score(y_true, y_pred)
+    residuals = y_true - y_pred
+    dw_stat = durbin_watson(residuals) 
+    return {"MAE": mae, "RMSE": rmse, "R²": r2, "SMAPE": smape, "EVS": evs, "Durbin-Watson": dw_stat}
 
 def evaluate_models(predictions_dir, actual_data_dir):
     """
@@ -71,16 +76,11 @@ def evaluate_models(predictions_dir, actual_data_dir):
         y_pred = merged_df['Predicted Close']
 
         # Compute metrics
-        mae = mean_absolute_error(y_true, y_pred)
-        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-        r2 = r2_score(y_true, y_pred)
-
+        metrics_dict = evaluate_predictions(y_true, y_pred)      
         metrics_list.append({
             "Model": model_name,
             "Stock": stock_name,
-            "MAE": mae,
-            "RMSE": rmse,
-            "R²": r2,
+            **metrics_dict,
         })
 
     metrics_table = pd.DataFrame(metrics_list)
