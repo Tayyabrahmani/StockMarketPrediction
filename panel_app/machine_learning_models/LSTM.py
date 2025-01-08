@@ -179,10 +179,10 @@ class LSTMStockModel:
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
         input_dim = self.X_train.shape[2]
-        print("Building the model...")
+        print("Building the LSTM model...")
         self.build_model(input_dim=input_dim, hidden_dim=hidden_dim)
 
-        print("Training the model...")
+        print("Training the LSTM model...")
         self.train(batch_size=batch_size, learning_rate=learning_rate, epochs=epochs)
 
         print("Generating predictions...")
