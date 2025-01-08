@@ -10,116 +10,152 @@ from machine_learning_models.preprocessing import (
     create_lagged_features,
     preprocess_data,
     train_test_split_time_series,
+    fill_na_values,
+    extract_date_features
 )
-from machine_learning_models.evaluation import evaluate_predictions, predict_and_inverse_transform
+from machine_learning_models.evaluation import predict_and_inverse_transform
 
-
-class TransformerBlock(nn.Module):
-    def __init__(self, embed_dim, num_heads, ff_dim, dropout=0.1):
-        super(TransformerBlock, self).__init__()
-        self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout)
-        self.feed_forward = nn.Sequential(
-            nn.Linear(embed_dim, ff_dim),
-            nn.ReLU(),
-            nn.Linear(ff_dim, embed_dim)
-        )
-        self.layer_norm1 = nn.LayerNorm(embed_dim)
-        self.layer_norm2 = nn.LayerNorm(embed_dim)
-        self.dropout = nn.Dropout(dropout)
+class PositionalEncoding(nn.Module):
+    def __init__(self, embed_size, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, embed_size)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, embed_size, 2).float() * (-np.log(10000.0) / embed_size))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
 
     def forward(self, x):
-        attn_output, _ = self.attention(x, x, x)
-        x = self.layer_norm1(x + self.dropout(attn_output))
-        ff_output = self.feed_forward(x)
-        x = self.layer_norm2(x + self.dropout(ff_output))
-        return x
+        return x + self.pe[:, :x.size(1)]
 
 
 class TransformerModel(nn.Module):
-    def __init__(self, input_dim, sequence_length, embed_dim=32, num_heads=2, ff_dim=128, num_layers=2, dropout=0.1):
+    def __init__(self, embed_size, num_heads, num_encoder_layers, num_decoder_layers, dropout=0.1):
         super(TransformerModel, self).__init__()
-        self.embedding = nn.Linear(input_dim, embed_dim)
-        self.positional_encoding = nn.Parameter(torch.zeros(1, sequence_length, embed_dim))
-        self.transformer_layers = nn.ModuleList([
-            TransformerBlock(embed_dim, num_heads, ff_dim, dropout) for _ in range(num_layers)
-        ])
-        self.fc = nn.Linear(embed_dim, 1)
+        self.embed_size = embed_size
+        self.input_embedding = nn.Linear(1, embed_size)  # Embedding for 1D input (stock prices)
+        self.positional_encoding = PositionalEncoding(embed_size)
+        self.transformer = nn.Transformer(
+            d_model=embed_size,
+            nhead=num_heads,
+            num_encoder_layers=num_encoder_layers,
+            num_decoder_layers=num_decoder_layers,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.fc_out = nn.Linear(embed_size, 1)
 
-    def forward(self, x):
-        x = self.embedding(x) + self.positional_encoding
-        for layer in self.transformer_layers:
-            x = layer(x)
-        return self.fc(x[:, -1, :])  # Output from the last time step
+    def forward(self, src, tgt):
+        """
+        Forward pass for the Transformer.
 
+        Parameters:
+            src (torch.Tensor): Source sequence (shape: batch_size, src_len, feature_dim).
+            tgt (torch.Tensor): Target sequence (shape: batch_size, tgt_len, feature_dim).
+
+        Returns:
+            torch.Tensor: Output predictions for the target sequence.
+        """
+        # Add feature dimension to src and tgt
+        src = src.unsqueeze(-1)  # Shape: (batch_size, src_len, 1)
+        tgt = tgt.unsqueeze(-1)  # Shape: (batch_size, tgt_len, 1)
+
+        # Embed and encode positional information
+        src = self.input_embedding(src)  # Shape: (batch_size, src_len, embed_size)
+        src = self.positional_encoding(src)
+
+        tgt = self.input_embedding(tgt)  # Shape: (batch_size, tgt_len, embed_size)
+        tgt = self.positional_encoding(tgt)
+
+        # Pass through the transformer
+        output = self.transformer(src, tgt)
+
+        # Return the prediction for the last time step
+        return self.fc_out(output[:, -1, :])
 
 class TransformerStockModel:
     def __init__(self, file_path, stock_name, hyperparameters=None):
         self.file_path = file_path
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
-            "embed_dim": 32,
-            "num_heads": 2,
-            "ff_dim": 128,
-            "num_layers": 2,
+            "embed_size": 32,
+            "num_heads": 4,
+            "num_encoder_layers": 3,
+            "num_decoder_layers": 3,
             "dropout": 0.1,
-            "learning_rate": 0.001,
-            "epochs": 10
+            "learning_rate": 0.0001,
+            "epochs": 30
         }
         self.model = None
-        self.scaler = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
-        self.data = create_lagged_features(self.data, target_col="Close")
-        self.features, self.target, self.scaler = preprocess_data(self.data, target_col="Close")
+
+        # Create features and target dataframes
+        self.target = self.data["Close"]
+        self.features = create_lagged_features(self.data)
+        self.features = fill_na_values(self.features)
+        self.features = extract_date_features(self.features)
+        self.features = self.features.drop(columns=['Close'], errors='ignore')
+
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
+        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test)
 
-    def build_model(self, input_dim, sequence_length):
+    def build_model(self):
         """
         Builds and initializes the Transformer model.
         """
         self.model = TransformerModel(
-            input_dim=input_dim,
-            sequence_length=sequence_length,
-            embed_dim=self.hyperparameters["embed_dim"],
+            embed_size=self.hyperparameters["embed_size"],
             num_heads=self.hyperparameters["num_heads"],
-            ff_dim=self.hyperparameters["ff_dim"],
-            num_layers=self.hyperparameters["num_layers"],
+            num_encoder_layers=self.hyperparameters["num_encoder_layers"],
+            num_decoder_layers=self.hyperparameters["num_decoder_layers"],
             dropout=self.hyperparameters["dropout"]
         )
         return self.model
 
-    def train(self):
+    def train(self, batch_size):
         """
         Trains the Transformer model.
         """
-        train_loader = self._get_data_loader(self.X_train, self.y_train)
+        train_loader = self._get_data_loader(self.X_train, self.y_train, batch_size=batch_size)
 
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
         criterion = nn.MSELoss()
 
+        # Move model to device (GPU if available)
+        self.model.to(self.device)
+
         for epoch in range(self.hyperparameters["epochs"]):
             self.model.train()
             epoch_loss = 0
+
             for X_batch, y_batch in train_loader:
+                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
+                src = X_batch[:, :-1]
+                tgt = X_batch[:, 1:]
+
                 optimizer.zero_grad()
-                predictions = self.model(X_batch)
+                predictions = self.model(src, tgt)
                 loss = criterion(predictions, y_batch)
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
             print(f"Epoch {epoch + 1}/{self.hyperparameters['epochs']}, Loss: {epoch_loss / len(train_loader):.4f}")
 
-    def _get_data_loader(self, X, y):
+    def _get_data_loader(self, X, y, batch_size):
         """
         Creates a DataLoader for the given data.
         """
-        dataset = TensorDataset(
-            torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32).unsqueeze(-1)
+        dataset = torch.utils.data.TensorDataset(
+            torch.tensor(X, dtype=torch.float32).to(self.device), 
+            torch.tensor(y, dtype=torch.float32).unsqueeze(-1).to(self.device)
         )
-        return DataLoader(dataset, batch_size=32, shuffle=False)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     def predict(self):
         """
@@ -128,8 +164,19 @@ class TransformerStockModel:
         Returns:
             np.array: Predicted values for the test data in the original stock price range.
         """
-        predictions = predict_and_inverse_transform(self.model, self.X_test, self.scaler, feature_dim=self.X_test.shape[2])
-        return predictions
+        self.model.eval()
+
+        # Ensure the test data is on the correct device
+        X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32).to(self.device)
+        src = X_test_tensor[:, :-1]  # Input sequence excluding the last value
+        tgt = X_test_tensor[:, 1:]   # Placeholder target sequence
+
+        with torch.no_grad():
+            predictions = self.model(src, tgt).cpu().numpy()
+
+        # Concatenate predictions and inverse transform
+        predictions_original_scale = self.target_scaler.inverse_transform(predictions)
+        return predictions_original_scale.flatten()
 
     def save_model(self):
         """
@@ -164,10 +211,8 @@ class TransformerStockModel:
         Runs the full pipeline: builds, trains, generates predictions, and saves the model and predictions.
         """
         print(f"Training Transformer model for {self.stock_name}...")
-        sequence_length = self.features.shape[1]
-        input_dim = self.X_train.shape[2]
-        self.build_model(input_dim=input_dim, sequence_length=sequence_length)
-        self.train()
+        self.build_model()
+        self.train(batch_size=16)
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
