@@ -115,7 +115,7 @@ def preprocess_data(X_train, X_test):
 
     return X_train_scaled, X_test_scaled, scaler
 
-def create_sequences(df, sequence_length, target_col="Close"):
+def create_sequences(df, sequence_length=30, target_col="Close"):
     """
     Creates sequences from the data for time series forecasting.
 
