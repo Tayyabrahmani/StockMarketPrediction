@@ -7,13 +7,16 @@ from machine_learning_models.preprocessing import (
     load_data,
     create_lagged_features,
     preprocess_data,
+    create_sequences,
     train_test_split_time_series,
+    fill_na_values,
+    extract_date_features
 )
 from machine_learning_models.evaluation import predict_and_inverse_transform
 
 
 class LSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim=32, num_layers=2):
+    def __init__(self, input_dim, hidden_dim=150, num_layers=1, dropout=0.2):
         """
         Initializes the LSTM model.
 
@@ -23,7 +26,10 @@ class LSTM(nn.Module):
             num_layers (int): Number of stacked LSTM layers.
         """
         super(LSTM, self).__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=0.2)
+
+        actual_dropout = 0.0 if num_layers == 1 else dropout
+
+        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=actual_dropout)
         self.fc = nn.Linear(hidden_dim, 1)
 
     def forward(self, x):
@@ -32,7 +38,7 @@ class LSTM(nn.Module):
 
 
 class LSTMStockModel:
-    def __init__(self, file_path, stock_name, hyperparameters=None):
+    def __init__(self, file_path, stock_name):
         """
         Initializes the LSTMStockModel with the necessary preprocessing and hyperparameters.
 
@@ -43,29 +49,35 @@ class LSTMStockModel:
         """
         self.file_path = file_path
         self.stock_name = stock_name
-        self.hyperparameters = hyperparameters or {"hidden_dim": 32, "learning_rate": 0.001, "epochs": 10}
         self.model = None
         self.scaler = None
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
-        self.data = create_lagged_features(self.data, target_col="Close")
-        self.features, self.target, self.scaler = preprocess_data(self.data, target_col="Close")
-        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
-            self.features, self.target
-        )
 
-    def build_model(self, input_dim):
+        # Create lagged features
+        self.data = create_lagged_features(self.data, target_col="Close")
+        self.data = fill_na_values(self.data)
+        self.data = extract_date_features(self.data)
+
+        X, y = create_sequences(self.data, sequence_length=30, target_col="Close")
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
+            X, y
+        )
+        self.X_train, self.X_test, self.scaler = preprocess_data(self.X_train, self.X_test)
+
+    def build_model(self, input_dim, hidden_dim):
         """
         Builds and initializes the LSTM model.
 
         Parameters:
             input_dim (int): Number of input features.
         """
-        self.model = LSTM(input_dim, hidden_dim=self.hyperparameters["hidden_dim"])
+        self.model = LSTM(input_dim, hidden_dim=hidden_dim)
         return self.model
 
-    def train(self):
+    def train(self, batch_size, learning_rate, epochs):
         """
         Trains the LSTM model.
         """
@@ -73,26 +85,34 @@ class LSTMStockModel:
             raise ValueError("Model has not been built. Call build_model() before training.")
 
         # Prepare data for PyTorch DataLoader
-        train_loader = self._get_data_loader(self.X_train, self.y_train)
+        train_loader = self._get_data_loader(self.X_train, self.y_train, batch_size)
 
         # Define optimizer and loss function
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
         criterion = nn.MSELoss()
 
+        # Move model to device (GPU if available)
+        self.model.to(self.device)
+
         # Training loop
-        for epoch in range(self.hyperparameters["epochs"]):
+        for epoch in range(epochs):
             self.model.train()
             epoch_loss = 0
             for X_batch, y_batch in train_loader:
+                # Move data to device
+                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
+
                 optimizer.zero_grad()
                 predictions = self.model(X_batch)
                 loss = criterion(predictions, y_batch)
                 loss.backward()
                 optimizer.step()
                 epoch_loss += loss.item()
-            print(f"Epoch {epoch + 1}/{self.hyperparameters['epochs']}, Loss: {epoch_loss / len(train_loader):.4f}")
 
-    def _get_data_loader(self, X, y):
+            avg_loss = epoch_loss / len(train_loader)
+            print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
+
+    def _get_data_loader(self, X, y, batch_size):
         """
         Creates a DataLoader for the given data.
 
@@ -104,9 +124,10 @@ class LSTMStockModel:
             DataLoader: PyTorch DataLoader.
         """
         dataset = torch.utils.data.TensorDataset(
-            torch.tensor(X, dtype=torch.float32), torch.tensor(y, dtype=torch.float32).unsqueeze(-1)
+            torch.tensor(X, dtype=torch.float32).to(self.device), 
+            torch.tensor(y, dtype=torch.float32).unsqueeze(-1).to(self.device)
         )
-        return torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=True)
+        return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     def predict(self):
         """
@@ -115,12 +136,14 @@ class LSTMStockModel:
         Returns:
             np.array: Predicted values for the test data in the original scale.
         """
-        predictions = predict_and_inverse_transform(
-            self.model,
-            self.X_test,
-            scaler=self.scaler,
-            feature_dim=self.X_test.shape[2],  # Exclude target column for inverse transform
-        )
+        self.model.eval()
+
+        # Ensure the test data is on the correct device
+        X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32).to(self.device)
+
+        with torch.no_grad():
+            predictions = self.model(X_test_tensor).cpu().numpy()
+
         return predictions
 
     def save_model(self):
@@ -151,14 +174,22 @@ class LSTMStockModel:
         })
         prediction_df.to_csv(prediction_path, index=False)
 
-    def run(self):
+    def run(self, batch_size=16, learning_rate=0.001, hidden_dim=150, epochs=50):
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
-        input_dim = self.X_train.shape[2]  # Input dimensions for LSTM
-        self.build_model(input_dim=input_dim)
-        self.train()
+        input_dim = self.X_train.shape[2]
+        print("Building the model...")
+        self.build_model(input_dim=input_dim, hidden_dim=hidden_dim)
+
+        print("Training the model...")
+        self.train(batch_size=batch_size, learning_rate=learning_rate, epochs=epochs)
+
+        print("Generating predictions...")
         predictions = self.predict()
+
+        print("Saving the model and predictions...")
         self.save_model()
         self.save_predictions(predictions)
+
         return predictions
