@@ -111,33 +111,39 @@ class TransformerStockModel:
         }
         self.model = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.sequence_length = 30
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
 
         # Create features and target dataframes
-        # self.target = self.data["Close"]
-        # self.features = create_lagged_features(self.data)
-        # self.features = fill_na_values(self.features)
-        # self.features = extract_date_features(self.features)
-        # self.features = self.features.drop(columns=['Close'], errors='ignore')
+        self.target = self.data["Close"]
+        self.features = create_lagged_features(self.data)
+        self.features = fill_na_values(self.features)
+        self.features = extract_date_features(self.features)
+        self.features = self.features.drop(columns=['Close'], errors='ignore')
 
-        # Create lagged features
-        self.data = create_lagged_features(self.data, target_col="Close")
-        self.data = fill_na_values(self.data)
-        self.data = extract_date_features(self.data)
-
-        import ipdb; ipdb.set_trace()
-        X, y = create_sequences(self.data, sequence_length=30, target_col="Close")
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
-            X, y
+            self.features, self.target
         )
-        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test, add_feature_dim=True)
 
-        # self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
-        #     self.features, self.target
-        # )
-        # self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test, add_feature_dim=True)
+        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test, add_feature_dim=False)
+
+        # Add the last 29 rows (sequence length) from the train data to create sequences
+        self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
+        self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
+        # Concatenate features and targets for sequence creation (train)
+        data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
+        self.X_train, self.y_train = create_sequences(
+            data_train, sequence_length=30, target_col="Close", is_df=False
+        )
+
+        # Concatenate features and targets for sequence creation (test)
+        data_test = np.hstack([self.X_test, self.y_test.reshape(-1, 1)])
+        self.X_test, self.y_test = create_sequences(
+            data_test, sequence_length=30, target_col="Close", is_df=False
+        )
 
     def build_model(self):
         """
