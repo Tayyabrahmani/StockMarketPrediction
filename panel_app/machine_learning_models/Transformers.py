@@ -9,7 +9,7 @@ from machine_learning_models.preprocessing import (
     load_data,
     create_lagged_features,
     preprocess_data,
-    preprocess_data_svr,
+    create_sequences,
     train_test_split_time_series,
     fill_na_values,
     extract_date_features
@@ -73,7 +73,7 @@ class TimeSeriesTransformer(nn.Module):
         self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_decoder_layers)
 
         # Final output layer
-        self.linear_mapping = nn.Linear(d_model * out_seq_len, out_seq_len)
+        self.linear_mapping = nn.Linear(d_model, 1)
 
     def forward(self, src, tgt, src_mask=None, tgt_mask=None):
         if src.ndim == 2:
@@ -91,9 +91,7 @@ class TimeSeriesTransformer(nn.Module):
             tgt=tgt, memory=encoder_output, tgt_mask=tgt_mask, memory_mask=src_mask
         )
 
-        # decoder_output = self.linear_mapping(decoder_output.flatten(start_dim=1))
-        decoder_output = self.linear_mapping(decoder_output[:, -1, :])
-        return decoder_output
+        return self.linear_mapping(decoder_output[:, -1, :])
 
 class TransformerStockModel:
     def __init__(self, file_path, stock_name, hyperparameters=None):
@@ -118,18 +116,29 @@ class TransformerStockModel:
         self.data = load_data(self.file_path)
 
         # Create features and target dataframes
-        self.target = self.data["Close"]
-        self.features = create_lagged_features(self.data)
-        self.features = fill_na_values(self.features)
-        self.features = extract_date_features(self.features)
-        self.features = self.features.drop(columns=['Close'], errors='ignore')
+        # self.target = self.data["Close"]
+        # self.features = create_lagged_features(self.data)
+        # self.features = fill_na_values(self.features)
+        # self.features = extract_date_features(self.features)
+        # self.features = self.features.drop(columns=['Close'], errors='ignore')
 
+        # Create lagged features
+        self.data = create_lagged_features(self.data, target_col="Close")
+        self.data = fill_na_values(self.data)
+        self.data = extract_date_features(self.data)
+
+        import ipdb; ipdb.set_trace()
+        X, y = create_sequences(self.data, sequence_length=30, target_col="Close")
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
-            self.features, self.target
+            X, y
         )
+        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test, add_feature_dim=True)
+
+        # self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
+        #     self.features, self.target
+        # )
         # self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test, add_feature_dim=True)
-        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data_svr(self.X_train, self.X_test, self.y_train, self.y_test)
-        
+
     def build_model(self):
         """
         Builds and initializes the Transformer model.
@@ -200,15 +209,22 @@ class TransformerStockModel:
 
         # Ensure the test data is on the correct device
         X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32).to(self.device)
-        src = X_test_tensor[:, :-1]  # Input sequence excluding the last value
-        tgt = X_test_tensor[:, 1:]   # Placeholder target sequence
+        src = X_test_tensor[:, :-1, :]  # Input sequence
+        tgt = X_test_tensor[:, 1:, :]   # Placeholder target sequence
 
         with torch.no_grad():
-            predictions = self.model(src, tgt).cpu().numpy()
+            predictions = self.model(src, tgt)
+    
+        # Inverse transform predictions back to original scale
+        predictions_original_scale = self.target_scaler.inverse_transform(
+            predictions.cpu().numpy().reshape(-1, predictions.shape[-1])
+        )
 
-        # Concatenate predictions and inverse transform
-        predictions_original_scale = self.target_scaler.inverse_transform(predictions)
-        return predictions_original_scale.flatten()
+        # Reshape back to match (n_samples, out_seq_len)
+        predictions_original_scale = predictions_original_scale.reshape(
+            X_test_tensor.shape[0], -1
+        )
+        return predictions_original_scale
 
     def save_model(self):
         """
