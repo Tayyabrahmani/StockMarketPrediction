@@ -51,27 +51,28 @@ class SVRStockModel:
 
     def train_with_time_series_cv(self):
         """
-        Performs time series cross-validation, starting with the first 70% of data as the initial training set.
+        Performs incremental time series cross-validation, starting with 70% of the data as training 
+        and using 5% increments for validation in each iteration.
         """
-        # Define the split ratio
-        initial_split_ratio = 0.7
-        initial_split_index = int(len(self.X_train) * initial_split_ratio)
-
-        X_train_initial = self.X_train[:initial_split_index]
-        y_train_initial = self.y_train[:initial_split_index]
-        X_validation_data = self.X_train[initial_split_index:]
-        y_validation_data = self.y_train[initial_split_index:]
-
         fold_metrics = []
-        num_folds = 5
-        fold_size = len(X_validation_data) // num_folds
+        total_data_length = len(self.X_train)
 
-        for fold in range(1, num_folds + 1):
-            fold_end_index = initial_split_index + fold * fold_size
-            X_train_fold = self.X_train[:fold_end_index]
-            y_train_fold = self.y_train[:fold_end_index]
-            X_val_fold = X_validation_data[:fold * fold_size]
-            y_val_fold = y_validation_data[:fold * fold_size]
+        # Start with 70% of data as the training set
+        initial_train_size = int(0.7 * total_data_length)
+        validation_size = int(0.05 * total_data_length)
+
+        train_start = 0
+        train_end = initial_train_size
+
+        while train_end + validation_size <= total_data_length:
+            val_start = train_end
+            val_end = train_end + validation_size
+
+            # Train and validation subsets
+            X_train_fold = self.X_train[train_start:train_end]
+            y_train_fold = self.y_train[train_start:train_end]
+            X_val_fold = self.X_train[val_start:val_end]
+            y_val_fold = self.y_train[val_start:val_end]
 
             # Reshape for SVR input
             X_train_fold_reshaped = X_train_fold.reshape(X_train_fold.shape[0], -1)
@@ -82,13 +83,15 @@ class SVRStockModel:
 
             # Validate the model
             predictions = self.model.predict(X_val_fold_reshaped)
-
-            predictions = self.target_scaler.inverse_transform(predictions.reshape(-1,1))
-            y_val_fold  = self.target_scaler.inverse_transform(y_val_fold.reshape(-1,1))
+            predictions = self.target_scaler.inverse_transform(predictions.reshape(-1, 1))
+            y_val_fold = self.target_scaler.inverse_transform(y_val_fold.reshape(-1, 1))
 
             rmse = np.sqrt(mean_squared_error(y_val_fold, predictions))
             fold_metrics.append(rmse)
-            print(f"Fold {fold} RMSE: {rmse}")
+            print(f"Fold {len(fold_metrics)} RMSE: {rmse}")
+            print(y_val_fold[-1], predictions[-1])
+            # Increment train_end for the next fold
+            train_end = val_end
 
         # Average RMSE across folds
         avg_rmse = np.mean(fold_metrics)
