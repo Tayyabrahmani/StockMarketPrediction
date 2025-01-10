@@ -5,6 +5,7 @@ import pandas as pd
 import optuna
 from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error
+from sklearn.model_selection import TimeSeriesSplit
 from machine_learning_models.preprocessing import (
     load_data,
     create_lagged_features,
@@ -14,7 +15,6 @@ from machine_learning_models.preprocessing import (
     extract_date_features
 )
 from machine_learning_models.evaluation import evaluate_predictions, plot_shap_feature_importance
-
 
 class SVRStockModel:
     def __init__(self, file_path, stock_name):
@@ -49,6 +49,52 @@ class SVRStockModel:
         X_train_reshaped = self.X_train.reshape(self.X_train.shape[0], -1)
         self.model.fit(X_train_reshaped, self.y_train)
 
+    def train_with_time_series_cv(self):
+        """
+        Performs time series cross-validation, starting with the first 70% of data as the initial training set.
+        """
+        # Define the split ratio
+        initial_split_ratio = 0.7
+        initial_split_index = int(len(self.X_train) * initial_split_ratio)
+
+        X_train_initial = self.X_train[:initial_split_index]
+        y_train_initial = self.y_train[:initial_split_index]
+        X_validation_data = self.X_train[initial_split_index:]
+        y_validation_data = self.y_train[initial_split_index:]
+
+        fold_metrics = []
+        num_folds = 5
+        fold_size = len(X_validation_data) // num_folds
+
+        for fold in range(1, num_folds + 1):
+            fold_end_index = initial_split_index + fold * fold_size
+            X_train_fold = self.X_train[:fold_end_index]
+            y_train_fold = self.y_train[:fold_end_index]
+            X_val_fold = X_validation_data[:fold * fold_size]
+            y_val_fold = y_validation_data[:fold * fold_size]
+
+            # Reshape for SVR input
+            X_train_fold_reshaped = X_train_fold.reshape(X_train_fold.shape[0], -1)
+            X_val_fold_reshaped = X_val_fold.reshape(X_val_fold.shape[0], -1)
+
+            # Train the model
+            self.model.fit(X_train_fold_reshaped, y_train_fold)
+
+            # Validate the model
+            predictions = self.model.predict(X_val_fold_reshaped)
+
+            predictions = self.target_scaler.inverse_transform(predictions.reshape(-1,1))
+            y_val_fold  = self.target_scaler.inverse_transform(y_val_fold.reshape(-1,1))
+
+            rmse = np.sqrt(mean_squared_error(y_val_fold, predictions))
+            fold_metrics.append(rmse)
+            print(f"Fold {fold} RMSE: {rmse}")
+
+        # Average RMSE across folds
+        avg_rmse = np.mean(fold_metrics)
+        print(f"Average RMSE across folds: {avg_rmse}")
+        return avg_rmse
+
     def predict(self):
         """
         Generates predictions for the test data and maps them back to the original stock price range.
@@ -75,7 +121,8 @@ class SVRStockModel:
             dict: Evaluation metrics.
         """
         predictions = self.predict()
-        metrics = evaluate_predictions(self.y_test, predictions)
+        y_test = self.target_scaler.inverse_transform(self.y_test.reshape(-1, 1))
+        metrics = evaluate_predictions(y_test, predictions)
         return metrics
 
     def save_model(self):
@@ -136,7 +183,7 @@ class SVRStockModel:
 
         # Use Optuna to optimize the objective function
         study = optuna.create_study(direction="minimize")
-        study.optimize(objective, n_trials=50)
+        study.optimize(objective, n_trials=5)
 
         # Get the best hyperparameters
         best_params = study.best_params
@@ -157,6 +204,10 @@ class SVRStockModel:
             gamma=best_params["gamma"],
             epsilon=best_params["epsilon"],
         )
+
+        print(f"Training SVR model for {self.stock_name} using time series cross-validation...")
+        avg_rmse = self.train_with_time_series_cv()
+        print(f"Average RMSE across cross-validation folds: {avg_rmse}")
 
         print(f"Training SVR model for {self.stock_name}...")
         self.train()
