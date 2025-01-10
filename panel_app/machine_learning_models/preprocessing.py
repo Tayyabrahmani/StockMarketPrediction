@@ -93,27 +93,42 @@ def fill_na_values(df):
     """
     return df.ffill().bfill()
 
-def preprocess_data(X_train, X_test):
+def preprocess_data_svr(X_train, X_test, y_train, y_test, X_val, y_val):
     """
-    Prepares data for training by creating sequences and scaling.
+    Prepares data for SVR by scaling both features and target values.
 
     Parameters:
-        df (pd.DataFrame): The input data.
-        target_col (str): The target column name.
-        sequence_length (int): Number of time steps for sequences.
-    
+        X_train (np.array or pd.DataFrame): Training features (2D).
+        X_test (np.array or pd.DataFrame): Test features (2D).
+        y_train (np.array or pd.Series): Training target values (1D).
+        y_test (np.array or pd.Series): Test target values (1D).
+
     Returns:
-        tuple: Scaled features (X), target (y), and fitted scaler.
+        tuple: Scaled features (X_train_scaled, X_test_scaled), scaled targets (y_train_scaled, y_test_scaled),
+               feature scaler, and target scaler.
     """
-    scaler = MinMaxScaler()
-    X_train_scaled = scaler.fit_transform(X_train.reshape(-1, X_train.shape[-1]))
-    X_test_scaled = scaler.transform(X_test.reshape(-1, X_test.shape[-1]))
+    # Convert to NumPy arrays if necessary
+    X_train = X_train.values if isinstance(X_train, pd.DataFrame) else X_train
+    X_test = X_test.values if isinstance(X_test, pd.DataFrame) else X_test
+    X_val = X_val.values if isinstance(X_val, pd.DataFrame) else X_val
+     
+    y_train = y_train.values if isinstance(y_train, (pd.Series, pd.DataFrame)) else y_train
+    y_test = y_test.values if isinstance(y_test, (pd.Series, pd.DataFrame)) else y_test
+    y_val = y_val.values if isinstance(y_val, (pd.Series, pd.DataFrame)) else y_val
 
-    # Reshape scaled data back to original dimensions
-    X_train_scaled = X_train_scaled.reshape(X_train.shape)
-    X_test_scaled = X_test_scaled.reshape(X_test.shape)
+    # Feature scaling
+    feature_scaler = MinMaxScaler()
+    X_train_scaled = feature_scaler.fit_transform(X_train)
+    X_val_scaled = feature_scaler.transform(X_val)
+    X_test_scaled = feature_scaler.transform(X_test)
 
-    return X_train_scaled, X_test_scaled, scaler
+    # Target scaling
+    target_scaler = MinMaxScaler()
+    y_train_scaled = target_scaler.fit_transform(y_train.reshape(-1, 1)).flatten()
+    y_test_scaled = target_scaler.transform(y_test.reshape(-1, 1)).flatten()
+    y_val_scaled = target_scaler.transform(y_val.reshape(-1, 1)).flatten()
+
+    return X_train_scaled, X_test_scaled, y_train_scaled, y_test_scaled, X_val_scaled, y_val_scaled, feature_scaler, target_scaler
 
 def create_sequences(df, sequence_length=30, target_col="Close"):
     """
