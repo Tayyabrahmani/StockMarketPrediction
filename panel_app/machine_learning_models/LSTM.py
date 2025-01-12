@@ -62,17 +62,6 @@ class LSTMStockModel:
         # Load and preprocess data
         self.data = load_data(self.file_path)
 
-        # Create lagged features
-        self.data = create_lagged_features(self.data, target_col="Close")
-        self.data = fill_na_values(self.data)
-        self.data = extract_date_features(self.data)
-
-        # X, y = create_sequences(self.data, sequence_length=30, target_col="Close")
-        # self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
-        #     X, y
-        # )
-        # self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test, add_feature_dim=True)
-
         # Create features and target dataframes
         self.target = self.data["Close"]
         self.features = create_lagged_features(self.data)
@@ -293,7 +282,7 @@ class LSTMStockModel:
 
         return study.best_params
 
-    def run(self, batch_size=64, learning_rate=0.00036, num_layers=3, dropout=0.41, hidden_dim=137, epochs=150, early_stop_patience=20):
+    def run(self, batch_size=64, learning_rate=0.0005182910773748057, num_layers=3, dropout=0.2034386452545233, hidden_dim=271, epochs=150, early_stop_patience=10):
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
