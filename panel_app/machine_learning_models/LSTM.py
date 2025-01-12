@@ -1,6 +1,5 @@
-import torch
-import torch.nn as nn
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1' 
 import pickle
 import pandas as pd
 import numpy as np
@@ -17,31 +16,10 @@ from machine_learning_models.evaluation import (
     predict_and_inverse_transform,
 )
 import optuna
-
-
-class LSTM(nn.Module):
-    def __init__(self, input_dim, hidden_dim=150, num_layers=1, dropout=0.2):
-        """
-        Initializes the LSTM model.
-
-        Parameters:
-            input_dim (int): Number of input features.
-            hidden_dim (int): Number of hidden units.
-            num_layers (int): Number of stacked LSTM layers.
-        """
-        super(LSTM, self).__init__()
-
-        actual_dropout = 0.0 if num_layers == 1 else dropout
-
-        self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, batch_first=True, dropout=actual_dropout)
-        self.fc = nn.Linear(hidden_dim, 1)
-        # self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers, dropout=actual_dropout, batch_first=True, bidirectional=True)
-        # self.fc = nn.Linear(hidden_dim * 2, 1)
-
-    def forward(self, x):
-        out, _ = self.lstm(x)
-        return self.fc(out[:, -1, :])
-
+from tensorflow.keras.models import Model, Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping, LearningRateScheduler, ReduceLROnPlateau
+import tensorflow as tf
 
 class LSTMStockModel:
     def __init__(self, file_path, stock_name):
@@ -56,7 +34,6 @@ class LSTMStockModel:
         self.file_path = file_path
         self.stock_name = stock_name
         self.model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.sequence_length = 30
 
         # Load and preprocess data
@@ -99,14 +76,35 @@ class LSTMStockModel:
             data_val, sequence_length=self.sequence_length, target_col="Close", is_df=False
         )
 
-    def build_model(self, input_dim, hidden_dim, num_layers, dropout):
+    def build_model(self, input_dim, hidden_dims, num_layers, dropout, bidirectional=False):
         """
         Builds and initializes the LSTM model.
 
         Parameters:
             input_dim (int): Number of input features.
+            hidden_dims (list of int): Number of units in each LSTM layer.
+            num_layers (int): Number of stacked LSTM layers.
+            dropout (float): Dropout rate.
         """
-        self.model = LSTM(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
+        self.model = Sequential()
+        self.model.add(Input(shape=(self.sequence_length, input_dim)))
+
+        for i in range(num_layers):
+            lstm_layer = LSTM(hidden_dims[i], return_sequences=(i < num_layers - 1))
+            if bidirectional:
+                lstm_layer = Bidirectional(lstm_layer)
+            self.model.add(lstm_layer)
+            self.model.add(Dropout(dropout))
+
+        # Output layer
+        self.model.add(Dense(1))
+
+        # Compile the model with gradient clipping
+        self.model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, clipnorm=1.0),
+            loss="mse",
+            metrics=["mae"],
+        )
         return self.model
 
     def train(self, batch_size, learning_rate, epochs, early_stop_patience):
@@ -116,80 +114,57 @@ class LSTMStockModel:
         if self.model is None:
             raise ValueError("Model has not been built. Call build_model() before training.")
 
-        # Prepare data for PyTorch DataLoader
-        train_loader = self._get_data_loader(self.X_train, self.y_train, batch_size)
-        val_loader = self._get_data_loader(self.X_val, self.y_val, batch_size)
-
-        # Define optimizer and loss function
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate, weight_decay=1e-5)
-        criterion = nn.MSELoss()
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
-
-        # Move model to device (GPU if available)
-        self.model.to(self.device)
-        best_val_loss = float('inf')
-        epochs_no_improve = 0
-
-        # Training loop
-        for epoch in range(epochs):
-            self.model.train()
-            epoch_loss = 0
-            for X_batch, y_batch in train_loader:
-                # Move data to device
-                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
-
-                optimizer.zero_grad()
-                predictions = self.model(X_batch)
-                loss = criterion(predictions, y_batch)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                optimizer.step()
-                epoch_loss += loss.item()
-
-            avg_train_loss = epoch_loss / len(train_loader)
-
-            # Validation
-            self.model.eval()
-            val_loss = 0
-            with torch.no_grad():
-                for X_val, y_val in val_loader:
-                    X_val, y_val = X_val.to(self.device), y_val.to(self.device)
-                    val_predictions = self.model(X_val)
-                    val_loss += criterion(val_predictions, y_val).item()
-            
-            avg_val_loss = val_loss / len(val_loader)
-            print(f"Epoch {epoch + 1}/{epochs}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
-
-            # Early stopping
-            if avg_val_loss < best_val_loss:
-                best_val_loss = avg_val_loss
-                epochs_no_improve = 0
-                # Save the best model
-                torch.save(self.model.state_dict(), "best_model.pt")
-            else:
-                epochs_no_improve += 1
-                if epochs_no_improve >= early_stop_patience:
-                    print("Early stopping triggered.")
-                    break
-
-            scheduler.step()
-
-    def _get_data_loader(self, X, y, batch_size):
-        """
-        Creates a DataLoader for the given data.
-
-        Parameters:
-            X (np.array): Input features.
-            y (np.array): Target values.
-
-        Returns:
-            DataLoader: PyTorch DataLoader.
-        """
-        dataset = torch.utils.data.TensorDataset(
-            torch.tensor(X, dtype=torch.float32).to(self.device), 
-            torch.tensor(y, dtype=torch.float32).unsqueeze(-1).to(self.device)
+        # Early stopping callback
+        early_stopping = EarlyStopping(
+            monitor="val_loss", patience=early_stop_patience, restore_best_weights=True
         )
-        return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+        # Reduce learning rate on plateau callback
+        lr_scheduler = ReduceLROnPlateau(
+            monitor="val_loss", factor=0.5, patience=5, min_lr=1e-6
+        )
+
+        # Train the model
+        history = self.model.fit(
+            self.X_train,
+            self.y_train,
+            validation_data=(self.X_val, self.y_val),
+            batch_size=batch_size,
+            epochs=epochs,
+            callbacks=[early_stopping, lr_scheduler],
+            verbose=1,
+        )
+        return history
+
+    def custom_train_loop(self, epochs):
+        """
+        Custom training loop with explicit control over training and gradient clipping.
+        """
+        optimizer = tf.keras.optimizers.Adam(learning_rate=0.001, clipnorm=1.0)
+        loss_fn = tf.keras.losses.MeanSquaredError()
+
+        train_dataset = tf.data.Dataset.from_tensor_slices((self.X_train, self.y_train)).batch(32)
+        val_dataset = tf.data.Dataset.from_tensor_slices((self.X_val, self.y_val)).batch(32)
+
+        for epoch in range(epochs):
+            print(f"Epoch {epoch + 1}/{epochs}")
+
+            # Training loop
+            for X_batch, y_batch in train_dataset:
+                with tf.GradientTape() as tape:
+                    predictions = self.model(X_batch, training=True)
+                    loss = loss_fn(y_batch, predictions)
+
+                gradients = tape.gradient(loss, self.model.trainable_variables)
+                optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+
+            # Validation loop
+            val_loss = 0
+            for X_val_batch, y_val_batch in val_dataset:
+                val_predictions = self.model(X_val_batch, training=False)
+                val_loss += loss_fn(y_val_batch, val_predictions).numpy()
+
+            print(f"Validation Loss: {val_loss / len(val_dataset):.4f}")
 
     def predict(self):
         """
@@ -198,17 +173,9 @@ class LSTMStockModel:
         Returns:
             np.array: Predictions in the original scale.
         """
-        self.model.eval()
-
-        # Ensure the test data is on the correct device
-        X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32).to(self.device)
-
-        with torch.no_grad():
-            predictions = self.model(X_test_tensor).cpu().numpy()
-
-        predictions_original_scale = self.target_scaler.inverse_transform(predictions.reshape(-1, 1))
-        
-        return predictions_original_scale.flatten()
+        predictions = self.model.predict(self.X_test)
+        predictions = self.target_scaler.inverse_transform(predictions)
+        return predictions.flatten()
 
     def save_model(self):
         """
@@ -243,28 +210,22 @@ class LSTMStockModel:
         Objective function for Optuna hyperparameter tuning.
         """
         # Define the hyperparameter search space
-        hidden_dim = trial.suggest_int("hidden_dim", 50, 300)
         num_layers = trial.suggest_int("num_layers", 1, 5)
+        hidden_dims = [trial.suggest_int(f"hidden_dim_{i}", 50, 300) for i in range(num_layers)]
         dropout = trial.suggest_float("dropout", 0.1, 0.5)
         learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
         batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
 
         # Build and train the model
-        self.build_model(input_dim=self.X_train.shape[2], hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
+        self.build_model(input_dim=self.X_train.shape[2], hidden_dims=hidden_dims, num_layers=num_layers, dropout=dropout)
         self.train(batch_size=batch_size, learning_rate=learning_rate, epochs=50, early_stop_patience=10)
 
         # Evaluate on the validation set
-        self.model.eval()
-        X_val_tensor = torch.tensor(self.X_val, dtype=torch.float32).to(self.device)
-        y_val_actual = self.target_scaler.inverse_transform(self.y_val.reshape(-1, 1)).flatten()
+        val_predictions = self.model.predict(self.X_val)
+        val_predictions_original_scale = self.target_scaler.inverse_transform(val_predictions)
 
-        with torch.no_grad():
-            val_predictions = self.model(X_val_tensor).cpu().numpy()
-
-        val_predictions_original_scale = self.target_scaler.inverse_transform(val_predictions.reshape(-1, 1)).flatten()
-
-        # Calculate RMSE on validation set
-        rmse = np.sqrt(np.mean((val_predictions_original_scale - y_val_actual) ** 2))
+        y_val_actual = self.target_scaler.inverse_transform(self.y_val.reshape(-1, 1))
+        rmse = np.sqrt(np.mean((val_predictions_original_scale.flatten() - y_val_actual.flatten()) ** 2))
 
         return rmse
 
@@ -282,25 +243,35 @@ class LSTMStockModel:
 
         return study.best_params
 
-    def run(self, batch_size=64, learning_rate=0.0005182910773748057, num_layers=3, dropout=0.2034386452545233, hidden_dim=271, epochs=150, early_stop_patience=10):
+    def run(self, epochs=150, early_stop_patience=10):
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
-        input_dim = self.X_train.shape[2]
-        best_params=self.tune_hyperparameters(n_trials=50)
+        # best_params = self.tune_hyperparameters(n_trials=20)
+        best_params = {'num_layers': 1, 'hidden_dim_0': 269, 'dropout': 0.1757380485131196, 'learning_rate': 9.668279090525918e-05, 'batch_size': 16}
 
         print("Building the LSTM model...")
-        # self.build_model(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
-        self.build_model(input_dim=input_dim, hidden_dim=best_params["hidden_dim"], num_layers=best_params["num_layers"], dropout=best_params["dropout"])
+        # self.build_model(input_dim=self.X_train.shape[2], hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
+        self.build_model(
+            input_dim=self.X_train.shape[2],
+            hidden_dims=[best_params[f"hidden_dim_{i}"] for i in range(best_params["num_layers"])],
+            num_layers=best_params["num_layers"],
+            dropout=best_params["dropout"],
+        )
 
         print("Training the LSTM model...")
         # self.train(batch_size=batch_size, learning_rate=learning_rate, epochs=epochs, early_stop_patience=early_stop_patience)
-        self.train(batch_size=best_params["batch_size"], learning_rate=best_params["learning_rate"], epochs=epochs, early_stop_patience=early_stop_patience)
+
+        self.train(
+            batch_size=best_params["batch_size"],
+            learning_rate=best_params["learning_rate"],
+            epochs=epochs,
+            early_stop_patience=early_stop_patience,
+        )
 
         print("Generating predictions...")
         predictions = self.predict()
 
-        print("Saving the model and predictions...")
-        self.save_model()
+        print("Saving predictions...")
         self.save_predictions(predictions)
         return predictions
