@@ -5,6 +5,8 @@ import pandas as pd
 import optuna
 from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error
+from sklearn.feature_selection import mutual_info_regression, RFE
+from sklearn.svm import SVR
 from sklearn.model_selection import TimeSeriesSplit
 from machine_learning_models.preprocessing import (
     load_data,
@@ -97,6 +99,52 @@ class SVRStockModel:
         avg_rmse = np.mean(fold_metrics)
         print(f"Average RMSE across folds: {avg_rmse}")
         return avg_rmse
+
+    # def select_features(self, top_k=10, rfe_features=5):
+    #     """
+    #     Selects relevant features using Mutual Information and Recursive Feature Elimination (RFE).
+
+    #     Parameters:
+    #         top_k (int): Number of top features to retain based on mutual information.
+    #         rfe_features (int): Number of features to retain after RFE.
+
+    #     Returns:
+    #         None: Updates self.features with the selected features.
+    #     """
+    #     print(f"Selecting top {top_k} features using Mutual Information for {self.stock_name}...")
+        
+    #     # Step 1: Calculate Mutual Information scores
+    #     X_train_reshaped = self.X_train.reshape(self.X_train.shape[0], -1)
+    #     mi_scores = mutual_info_regression(X_train_reshaped, self.y_train)
+        
+    #     # Get top features based on Mutual Information
+    #     top_indices = mi_scores.argsort()[::-1][:top_k]
+    #     top_features = self.features.columns[top_indices]
+    #     print(f"Top {top_k} features based on Mutual Information: {top_features.tolist()}")
+        
+    #     # Step 2: Apply RFE on the top features
+    #     X_top = self.X_train[:, top_indices]  # Select top features
+    #     model = SVR(kernel="rbf")
+    #     rfe = RFE(estimator=model, n_features_to_select=rfe_features)
+    #     rfe.fit(X_top, self.y_train)
+        
+    #     # Get final selected features
+    #     rfe_selected_indices = top_indices[rfe.support_]
+    #     selected_features = self.features.columns[rfe_selected_indices]
+    #     print(f"Selected Features after RFE: {selected_features.tolist()}")
+        
+    #     # Update self.features with selected features
+    #     self.features = self.features[selected_features]
+
+    #     # Re-preprocess the data with selected features
+    #     self.X_train, self.X_test, self.y_train, self.y_test, self.X_val, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data_svr(
+    #         self.X_train[:, rfe_selected_indices],
+    #         self.X_test[:, rfe_selected_indices],
+    #         self.y_train,
+    #         self.y_test,
+    #         self.X_val[:, rfe_selected_indices],
+    #         self.y_val
+    #     )
 
     def predict(self):
         """
@@ -197,6 +245,9 @@ class SVRStockModel:
         """
         Runs the full pipeline: trains, evaluates, and saves the model and predictions.
         """
+        # print(f"Selecting features for {self.stock_name}...")
+        # self.select_features(top_k=25, rfe_features=5)
+
         print(f"Optimizing hyperparameters for {self.stock_name}...")
         best_params = self.optimize_hyperparameters()
 
