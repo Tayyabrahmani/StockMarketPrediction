@@ -1,5 +1,5 @@
-import torch
-import torch.nn as nn
+import tensorflow as tf
+from tensorflow.keras import layers, Model
 import os
 import pickle
 import pandas as pd
@@ -13,18 +13,26 @@ from machine_learning_models.preprocessing import (
     extract_date_features
 )
 from machine_learning_models.evaluation import predict_and_inverse_transform
+import numpy as np
+import optuna
+from optuna.integration import TFKerasPruningCallback
 
-
-class RNN(nn.Module):
+class RNN(Model):
     def __init__(self, input_dim, hidden_dim=50, num_layers=3, dropout=0.2):
         super(RNN, self).__init__()
-        self.rnn = nn.RNN(input_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout)
-        self.fc = nn.Linear(hidden_dim, 1)
+        self.rnn_layers = [
+            layers.SimpleRNN(
+                hidden_dim, return_sequences=(i < num_layers - 1), dropout=dropout
+            )
+            for i in range(num_layers)
+        ]
+        self.fc = layers.Dense(1)
 
-    def forward(self, x):
-        out, _ = self.rnn(x)
-        return self.fc(out[:, -1, :])
-
+    def call(self, inputs):
+        x = inputs
+        for rnn_layer in self.rnn_layers:
+            x = rnn_layer(x)
+        return self.fc(x)
 
 class RNNStockModel:
     def __init__(self, file_path, stock_name):
@@ -39,107 +47,70 @@ class RNNStockModel:
         self.file_path = file_path
         self.stock_name = stock_name
         self.model = None
-        self.scaler = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.sequence_length = 30
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
 
-        # Create lagged features
-        self.data = create_lagged_features(self.data, target_col="Close")
-        self.data = fill_na_values(self.data)
-        self.data = extract_date_features(self.data)
+        # Create features and target dataframes
+        self.target = self.data["Close"]
+        self.features = create_lagged_features(self.data)
+        self.features = fill_na_values(self.features)
+        self.features = extract_date_features(self.features)
+        self.features = self.features.drop(columns=['Close'], errors='ignore')
 
-        X, y = create_sequences(self.data, sequence_length=30, target_col="Close")
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
-            X, y
+            self.features, self.target
         )
-        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test)
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train
+        )
 
-    def build_model(self, input_dim, hidden_dim, num_layers, dropout):
-        """
-        Builds and initializes the RNN model.
+        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
-        Parameters:
-            input_dim (int): Number of input features.
-        """
-        self.model = RNN(input_dim, hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout).to(self.device)
+        # Add the last 29 rows (sequence length) from the train data to create sequences
+        self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
+        self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
+        # Concatenate features and targets for sequence creation (train)
+        data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
+        self.X_train, self.y_train = create_sequences(
+            data_train, sequence_length=self.sequence_length, target_col="Close", is_df=False
+        )
+
+        # Concatenate features and targets for sequence creation (test)
+        data_test = np.hstack([self.X_test, self.y_test.reshape(-1, 1)])
+        self.X_test, self.y_test = create_sequences(
+            data_test, sequence_length=self.sequence_length, target_col="Close", is_df=False
+        )
+
+        data_val = np.hstack([self.X_val, self.y_val.reshape(-1, 1)])
+        self.X_val, self.y_val = create_sequences(
+            data_val, sequence_length=self.sequence_length, target_col="Close", is_df=False
+        )
+
+    def build_model(self, input_dim, hidden_dim, num_layers, dropout, learning_rate):
+        self.model = RNN(input_dim, hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
+        self.model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss="mse", metrics=["mae"])
         return self.model
 
-    def train(self, batch_size, learning_rate, epochs):
-        """
-        Trains the RNN model.
-        """
-        train_loader = self._get_data_loader(self.X_train, self.y_train, batch_size)
-        
-        # Define optimizer and loss function
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
-        criterion = nn.MSELoss()
-
-        for epoch in range(epochs):
-            self.model.train()
-            epoch_loss = 0
-            for X_batch, y_batch in train_loader:
-                # Move data to device
-                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
-
-                optimizer.zero_grad()
-
-                # # Reshape y_batch to match predictions' shape
-                # y_batch = y_batch.view(-1, 1)  # Reshape to [batch_size, 1]
-
-                predictions = self.model(X_batch)
-                loss = criterion(predictions, y_batch)
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-
-            avg_loss = epoch_loss / len(train_loader)
-            print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
-
-    def _get_data_loader(self, X, y, batch_size):
-        """
-        Creates a DataLoader for the given data.
-
-        Parameters:
-            X (np.array): Input features.
-            y (np.array): Target values.
-
-        Returns:
-            DataLoader: A PyTorch DataLoader.
-        """
-        dataset = torch.utils.data.TensorDataset(
-            torch.tensor(X, dtype=torch.float32).to(self.device), 
-            torch.tensor(y, dtype=torch.float32).unsqueeze(-1).to(self.device)
+    def train(self, batch_size, epochs, patience=5):
+        early_stopping = tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss", patience=patience, restore_best_weights=True
         )
-        return torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        self.model.fit(
+            self.X_train,
+            self.y_train,
+            validation_data=(self.X_val, self.y_val),
+            batch_size=batch_size,
+            epochs=epochs,
+            callbacks=[early_stopping],
+        )
 
     def predict(self):
-        """
-        Generates predictions for the test data and inverse transforms them.
-
-        Returns:
-            np.array: Predictions in the original scale.
-        """
-        self.model.eval()
-
-        # Ensure the test data is on the correct device
-        X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32).to(self.device)
-
-        with torch.no_grad():
-            predictions = self.model(X_test_tensor).cpu().numpy()
-
-        predictions_original_scale = self.target_scaler.inverse_transform(predictions.reshape(-1, 1))
-        
-        return predictions_original_scale.flatten()
-
-        # predictions = predict_and_inverse_transform(
-        #     model=self.model,
-        #     X=self.X_test,
-        #     scaler=self.scaler,
-        #     feature_dim=self.X_test.shape[2],  # Dynamically fetch feature dimension
-        # )
-        # return predictions
+        predictions = self.model.predict(self.X_test)
+        predictions = self.target_scaler.inverse_transform(predictions)
+        return predictions.flatten()
 
     def save_model(self):
         """
@@ -147,9 +118,8 @@ class RNNStockModel:
         """
         model_dir = "Output_Data/saved_models"
         os.makedirs(model_dir, exist_ok=True)
-        model_path = os.path.join(model_dir, f"{self.stock_name}_rnn_model.pkl")
-        with open(model_path, "wb") as f:
-            pickle.dump(self.model, f)
+        model_path = os.path.join(model_dir, f"{self.stock_name}_rnn_model.keras")
+        self.model.save(model_path)
 
     def save_predictions(self, predictions):
         """
@@ -169,15 +139,56 @@ class RNNStockModel:
         })
         prediction_df.to_csv(prediction_path, index=False)
 
-    def run(self, batch_size=16, learning_rate=0.0008, hidden_dim=150, num_layers=1, epochs=30, dropout=0.2):
-        """
-        Runs the full pipeline: builds, trains, generates predictions, and saves the model and predictions.
-        """
-        print(f"Training RNN model for {self.stock_name}...")
-        input_dim = self.X_train.shape[2]
-        self.build_model(input_dim=input_dim, hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
+    def tune_hyperparameters(self, n_trials=50):
+        def objective(trial):
+            # Suggest hyperparameters
+            hidden_dim = trial.suggest_int("hidden_dim", 50, 300, step=50)
+            num_layers = trial.suggest_int("num_layers", 1, 3)
+            dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.1)
+            learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+            batch_size = trial.suggest_int("batch_size", 16, 64, step=16)
 
-        self.train(batch_size=batch_size, learning_rate=learning_rate, epochs=epochs)
+            # Build and compile model
+            self.build_model(input_dim=self.X_train.shape[2], hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout, learning_rate=learning_rate)
+
+            # Train the model
+            early_stopping = TFKerasPruningCallback(trial, monitor="val_loss")
+            history = self.model.fit(
+                self.X_train,
+                self.y_train,
+                validation_data=(self.X_val, self.y_val),
+                batch_size=batch_size,
+                epochs=30,
+                callbacks=[early_stopping],
+                verbose=0
+            )
+
+            # Return the validation loss for the last epoch
+            return history.history["val_loss"][-1]
+
+        # Create an Optuna study and optimize
+        study = optuna.create_study(direction="minimize")
+        study.optimize(objective, n_trials=n_trials)
+
+        print("Best parameters:", study.best_params)
+        print("Best validation loss:", study.best_value)
+        return study.best_params
+
+    def run(self, epochs=30, early_stop_patience=10):
+        print(f"Training RNN model for {self.stock_name}...")
+        # best_params = self.tune_hyperparameters(n_trials=15)
+        best_params = {'num_layers': 1, 'hidden_dim': 300, 'dropout': 0.1, 'learning_rate': 0.00031703223453147364, 'batch_size': 16}
+
+        input_dim = self.X_train.shape[2]
+        self.build_model(
+            input_dim=input_dim,
+            hidden_dim=best_params["hidden_dim"],
+            num_layers=best_params["num_layers"],
+            dropout=best_params["dropout"],
+            learning_rate=best_params["learning_rate"]
+            )
+
+        self.train(batch_size=best_params["batch_size"], epochs=epochs)
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
