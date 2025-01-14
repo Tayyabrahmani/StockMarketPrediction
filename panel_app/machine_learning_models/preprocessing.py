@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.model_selection import train_test_split
 lags = [1, 2, 3, 7, 14, 28]
 
@@ -130,7 +130,61 @@ def preprocess_data_svr(X_train, X_test, y_train, y_test, X_val, y_val):
 
     return X_train_scaled, X_test_scaled, y_train_scaled, y_test_scaled, X_val_scaled, y_val_scaled, feature_scaler, target_scaler
 
-def create_sequences(df, sequence_length=30, target_col="Close"):
+def preprocess_data(X_train, X_test, X_val, y_train, y_test, y_val, add_feature_dim=False):
+    """
+    Prepares data for training by scaling features and targets.
+
+    Parameters:
+        X_train, X_test: Training and testing feature datasets.
+        y_train, y_test: Training and testing target datasets.
+        add_feature_dim (bool): If True, adds a feature dimension for models like transformers.
+
+    Returns:
+        tuple: Scaled features (X_train_scaled, X_test_scaled), 
+               targets (y_train_scaled, y_test_scaled), 
+               and the fitted scalers (feature_scaler, target_scaler).
+    """
+    # Initialize scalers
+    feature_scaler = StandardScaler()
+    target_scaler = StandardScaler()
+
+    # Convert to NumPy arrays
+    X_train = X_train.values if isinstance(X_train, pd.DataFrame) else X_train
+    X_test = X_test.values if isinstance(X_test, pd.DataFrame) else X_test
+    X_val = X_val.values if isinstance(X_val, pd.DataFrame) else X_val
+    y_train = y_train.values if isinstance(y_train, (pd.Series, pd.DataFrame)) else y_train
+    y_test = y_test.values if isinstance(y_test, (pd.Series, pd.DataFrame)) else y_test
+    y_val = y_val.values if isinstance(y_val, (pd.Series, pd.DataFrame)) else y_val
+
+    if add_feature_dim:
+        # Feature scaling
+        n_samples, sequence_length, n_features = X_train.shape
+        X_train = X_train.reshape(-1, n_features)
+
+        n_samples_test, sequence_length_test, n_features_test = X_test.shape
+        X_test = X_test.reshape(-1, n_features)
+
+        n_samples_val, sequence_length_val, n_features_val = X_val.shape
+        X_val = X_val.reshape(-1, n_features)
+
+    X_train_scaled = feature_scaler.fit_transform(X_train)
+    X_test_scaled = feature_scaler.transform(X_test)
+    X_val_scaled = feature_scaler.transform(X_val)
+
+    if add_feature_dim:
+        # Reshape back to original dimensions
+        X_train_scaled = X_train_scaled.reshape(n_samples, sequence_length, n_features)
+        X_test_scaled = X_test_scaled.reshape(n_samples_test, sequence_length_test, n_features_test)
+        X_val_scaled = X_val_scaled.reshape(n_samples_val, sequence_length_val, n_features_val)
+
+    # Target scaling
+    y_train_scaled = target_scaler.fit_transform(y_train.reshape(-1, 1)).flatten()
+    y_test_scaled = target_scaler.transform(y_test.reshape(-1, 1)).flatten()
+    y_val_scaled = target_scaler.transform(y_val.reshape(-1, 1)).flatten()
+
+    return X_train_scaled, X_test_scaled, X_val_scaled, y_train_scaled, y_test_scaled, y_val_scaled, feature_scaler, target_scaler
+
+def create_sequences(df, sequence_length=30, target_col="Close", is_df=True):
     """
     Creates sequences from the data for time series forecasting.
 
@@ -141,12 +195,33 @@ def create_sequences(df, sequence_length=30, target_col="Close"):
     Returns:
         tuple: Features (X) and target (y) sequences.
     """
-    df = df[[col for col in df.columns if col != target_col] + [target_col]].values
+    if is_df:
+        df = df[[col for col in df.columns if col != target_col] + [target_col]].values
+
     X, y = [], []
     for i in range(len(df) - sequence_length):
-        X.append(df[i:i + sequence_length, :-1])
+        # X.append(df[i:i + sequence_length, :-1])
+        X.append(df[i+1:i + sequence_length + 1, :-1])
         y.append(df[i + sequence_length, -1])
     return np.array(X), np.array(y)
+
+def create_sequences_transformer(data, sequence_length, target_col):
+    sequences = []
+    targets = []
+
+    for i in range(len(data) - sequence_length):
+        seq = data.iloc[i:i+sequence_length].drop(columns=[target_col]).values
+        target = data.iloc[i+sequence_length][target_col]
+        sequences.append(seq)
+        targets.append(target)
+
+    sequences = np.array(sequences)
+    targets = np.array(targets)
+
+    print("Sequences shape:", sequences.shape)  # Debug
+    print("Targets shape:", targets.shape)      # Debug
+
+    return sequences, targets
 
 def preprocess_data_for_arima(df, target_col='Close'):
     """
