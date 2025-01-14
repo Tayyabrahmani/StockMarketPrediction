@@ -1,5 +1,7 @@
-import torch
-import torch.nn as nn
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
+import tensorflow as tf
+from tensorflow.keras import layers, models, optimizers, callbacks
 import os
 import pickle
 import pandas as pd
@@ -13,54 +15,60 @@ from machine_learning_models.preprocessing import (
     extract_date_features
 )
 from machine_learning_models.evaluation import predict_and_inverse_transform
-import torch.nn.functional as F
-from torch.optim.lr_scheduler import ReduceLROnPlateau
 import optuna
 
-class CNN(nn.Module):
-    def __init__(self, input_dim, sequence_length, num_filters=64, dropout_rate=0.2):
+class CNN(tf.keras.Model):
+    def __init__(self, input_dim, sequence_length, num_filters=128, dropout_rate=0.3, embed_dim=128):
         super(CNN, self).__init__()
+        self.input_dim = input_dim
+        self.sequence_length = sequence_length
 
-        # Convolutional layers with residual connections
-        self.conv1 = nn.Conv1d(in_channels=input_dim, out_channels=num_filters, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm1d(num_filters)
-        self.conv2 = nn.Conv1d(in_channels=num_filters, out_channels=num_filters * 2, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm1d(num_filters * 2)
-        self.conv3 = nn.Conv1d(in_channels=num_filters * 2, out_channels=num_filters * 4, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm1d(num_filters * 4)
-        self.dropout = nn.Dropout(dropout_rate)
+        self.conv1 = layers.Conv1D(filters=num_filters, kernel_size=3, padding="same", activation="relu",
+                                   input_shape=(sequence_length, input_dim))
+        self.bn1 = layers.BatchNormalization()
 
-        # Fully connected layers
-        self.flattened_size = num_filters * 4 * sequence_length
-        self.fc1 = nn.Linear(self.flattened_size, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 1)
+        self.conv2 = layers.Conv1D(filters=num_filters * 2, kernel_size=5, padding="same", activation="relu")
+        self.bn2 = layers.BatchNormalization()
 
-    def forward(self, x):
-        batch_size = x.size(0)
+        self.conv3 = layers.Conv1D(filters=num_filters * 4, kernel_size=7, padding="same", activation="relu")
+        self.bn3 = layers.BatchNormalization()
 
-        # CNN Feature Extraction
-        x = x.permute(0, 2, 1).contiguous()
-        residual = x.reshape(batch_size, -1)  # Flatten input for residual connection
+        self.global_pool = layers.GlobalAveragePooling1D()
 
-        x = F.relu(self.bn1(self.conv1(x)))
-        x = F.relu(self.bn2(self.conv2(x)))
-        x = F.relu(self.bn3(self.conv3(x)))
+        self.project_to_embed = layers.Dense(embed_dim, activation="relu")
+
+        self.attention = layers.Attention()
+
+        self.dropout = layers.Dropout(dropout_rate)
+
+        self.fc1 = layers.Dense(64, activation="relu")
+        self.fc2 = layers.Dense(32, activation="relu")
+        self.fc3 = layers.Dense(1, activation="linear")
+
+    def call(self, inputs):
+        x = self.conv1(inputs)
+        x = self.bn1(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+
+        x = self.conv3(x)
+        x = self.bn3(x)
+
+        # Reshape before attention: (batch_size, sequence_length, feature_dim)
+        x = self.project_to_embed(x)
+
+        # Prepare for Attention layer: (batch_size, sequence_length, feature_dim)
+        attention_input = tf.expand_dims(x, axis=1) if len(x.shape) == 2 else x
+
+        # Apply Attention
+        x = self.attention([attention_input, attention_input])
+        x = tf.reduce_mean(x, axis=1)  # Reduce sequence dimension
+
         x = self.dropout(x)
 
-        # Flatten for fully connected layers
-        x = x.reshape(batch_size, -1)
-
-        # Align residual dimensions
-        if residual.size(1) != x.size(1):
-            residual = nn.Linear(residual.size(1), x.size(1)).to(x.device)(residual)
-
-        # Residual connection
-        x += residual
-
-        # Fully connected layers
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
+        x = self.fc1(x)
+        x = self.fc2(x)
         x = self.fc3(x)
 
         return x
@@ -83,11 +91,19 @@ class CNNStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             X, y
         )
-        self.X_train, self.X_test, self.scaler = preprocess_data(self.X_train, self.X_test)
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train
+        )
+
+        (self.X_train, self.X_test, self.X_val,
+         self.y_train, self.y_test, self.y_val,
+         self.feature_scaler, self.target_scaler) = preprocess_data(self.X_train, self.X_test, self.X_val,
+                                                                    self.y_train, self.y_test, self.y_val,
+                                                                    add_feature_dim=True)
 
     def objective(self, trial):
         # Suggest hyperparameters for Optuna to tune
-        num_filters = trial.suggest_categorical("num_filters", [16, 32, 64])
+        num_filters = trial.suggest_categorical("num_filters", [32, 64, 128])
         dropout_rate = trial.suggest_float("dropout_rate", 0.1, 0.5)
         learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
         epochs = trial.suggest_int("epochs", 10, 30)
@@ -95,106 +111,86 @@ class CNNStockModel:
         # Initialize and train the model
         sequence_length = self.X_train.shape[1]
         input_dim = self.X_train.shape[2]
-        model = CNN(input_dim=input_dim, sequence_length=sequence_length, dropout_rate=dropout_rate)
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        criterion = nn.MSELoss()
+        model = CNN(
+            input_dim=input_dim,
+            sequence_length=sequence_length,
+            num_filters=num_filters, 
+            dropout_rate=dropout_rate
+            )
 
-        X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
-        y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32).unsqueeze(-1)
-        train_dataset = torch.utils.data.TensorDataset(X_train_tensor, y_train_tensor)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=32, shuffle=True)
+        # Compile model
+        optimizer = optimizers.Adam(learning_rate=learning_rate)
+        model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
 
-        # Training loop
-        model.train()
-        for epoch in range(epochs):
-            epoch_loss = 0
-            for X_batch, y_batch in train_loader:
-                optimizer.zero_grad()
-                predictions = model(X_batch)
-                loss = criterion(predictions, y_batch)
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
+        # Training
+        early_stopping = callbacks.EarlyStopping(
+            monitor="val_loss", patience=5, restore_best_weights=True
+        )
+        lr_scheduler = callbacks.ReduceLROnPlateau(
+            monitor="val_loss", factor=0.5, patience=3, verbose=0
+        )
+        model.fit(
+            self.X_train,
+            self.y_train,
+            validation_data=(self.X_val, self.y_val),
+            epochs=epochs,
+            batch_size=32,
+            verbose=0,
+            callbacks=[early_stopping, lr_scheduler],
+        )
 
-        # Validation loss calculation
-        model.eval()
-        with torch.no_grad():
-            X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32)
-            y_test_tensor = torch.tensor(self.y_test, dtype=torch.float32).unsqueeze(-1)
-            predictions = model(X_test_tensor)
-            val_loss = criterion(predictions, y_test_tensor).item()
-
+        # Evaluate on validation data
+        val_loss = model.evaluate(self.X_val, self.y_val, verbose=0)[0]
         return val_loss
 
-    def run_tuning(self, n_trials=15, update_optuna_study=False):
+    def run_tuning(self, n_trials=50, update_optuna_study=False):
         if not update_optuna_study:
             return
 
-        # Define a pruner for early stopping of unpromising trials
-        pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=3)
-
-        # Create the Optuna study with the pruner
-        study = optuna.create_study(direction="minimize", pruner=pruner)
-
-        # Optimize the study
+        # Define Optuna study
+        study = optuna.create_study(direction="minimize")
         study.optimize(self.objective, n_trials=n_trials)
 
         print("Best hyperparameters:", study.best_params)
         print("Best validation loss:", study.best_value)
+
         return study.best_params
 
     def train(self, learning_rate=1e-3, epochs=10, batch_size=32):
         """
         Trains the CNN model.
         """
-        # Prepare data for PyTorch DataLoader
-        X_train_tensor = torch.tensor(self.X_train, dtype=torch.float32)
-        y_train_tensor = torch.tensor(self.y_train, dtype=torch.float32).unsqueeze(-1)
-        train_dataset = torch.utils.data.TensorDataset(X_train_tensor, y_train_tensor)
-        train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        # Define optimizer, loss, and learning rate scheduler
+        optimizer = optimizers.Adam(learning_rate=learning_rate)
+        lr_scheduler = callbacks.ReduceLROnPlateau(
+            monitor="val_loss", factor=0.5, patience=5, verbose=1
+        )
+        early_stopping = callbacks.EarlyStopping(
+            monitor="val_loss", patience=10, restore_best_weights=True
+        )
 
-        # Define loss and optimizer
-        criterion = nn.HuberLoss()
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=learning_rate)
-        scheduler = ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=5)
+        self.model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
 
-        # Training loop
-        for epoch in range(epochs):
-            self.model.train()
-            epoch_loss = 0
-            for X_batch, y_batch in train_loader:
-                optimizer.zero_grad()
-                predictions = self.model(X_batch)
-                loss = criterion(predictions, y_batch)
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-
-            avg_loss = epoch_loss / len(train_loader)
-            print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
-            scheduler.step(avg_loss)
+        # Train the model
+        self.model.fit(
+            self.X_train,
+            self.y_train,
+            validation_data=(self.X_val, self.y_val),
+            epochs=epochs,
+            batch_size=batch_size,
+            callbacks=[lr_scheduler, early_stopping],
+        )
 
     def predict(self):
         """
-        Predicts using the trained EnhancedCNN model.
+        Generates predictions for the test data and inverse transforms them.
+
+        Returns:
+            np.array: Predictions in the original scale.
         """
-        if self.model is None:
-            raise ValueError("Model is not initialized. Build and train the model before predicting.")
-
-        self.model.eval()
-        with torch.no_grad():
-            X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32)
-            predictions = self.model(X_test_tensor).numpy()
-
-        predictions_reshaped = predictions.reshape(-1, 1)
-        return predictions
-
-        # return predict_and_inverse_transform(
-        #     model=self.model,
-        #     X=predictions_reshaped,
-        #     scaler=self.scaler,
-        #     feature_dim=self.X_test.shape[2]
-        # )
+        predictions = self.model.predict(self.X_test)
+        predictions_original_scale = self.target_scaler.inverse_transform(predictions)
+        return predictions_original_scale.flatten()
 
     def save_model(self):
         """
@@ -202,9 +198,8 @@ class CNNStockModel:
         """
         model_dir = "Output_Data/saved_models"
         os.makedirs(model_dir, exist_ok=True)
-        model_path = os.path.join(model_dir, f"{self.stock_name}_cnn_model.pkl")
-        with open(model_path, "wb") as f:
-            pickle.dump(self.model, f)
+        model_path = os.path.join(model_dir, f"{self.stock_name}_cnn_model.keras")
+        self.model.save(model_path)
 
     def save_predictions(self, predictions):
         """
@@ -220,7 +215,7 @@ class CNNStockModel:
         # Save actual vs predicted values
         prediction_df = pd.DataFrame({
             "Date": pd.to_datetime(self.data.index[-len(predictions):]),
-            "Predicted Close": predictions.flatten()
+            "Predicted Close": predictions
         })
         prediction_df.to_csv(prediction_path, index=False)
 
@@ -228,8 +223,8 @@ class CNNStockModel:
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
-        # best_params = self.run_tuning(update_optuna_study=False)
-        best_params = {'num_filters': 32, 'dropout_rate': 0.20815363258412045, 'learning_rate': 0.0005816740646783397, 'epochs': 1}
+        # best_params = self.run_tuning(n_trials=20, update_optuna_study=True)
+        best_params = {'num_filters': 32, 'dropout_rate': 0.21596336761657278, 'learning_rate': 0.0006700845786374102, 'epochs': 20}
         print(f"Best parameters found: {best_params}")
 
         sequence_length = self.X_train.shape[1]
