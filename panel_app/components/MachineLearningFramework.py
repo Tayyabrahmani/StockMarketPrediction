@@ -1,6 +1,5 @@
 from machine_learning_models.ARIMA import ARIMAStockModel
 from machine_learning_models.CNN import CNNStockModel
-from machine_learning_models.GRU import GRUStockModel
 from machine_learning_models.LSTM import LSTMStockModel
 from machine_learning_models.RNN import RNNStockModel
 from machine_learning_models.SVR import SVRStockModel
@@ -30,7 +29,6 @@ class MachineLearningFramework:
             "XGBoost": XGBoostStockModel,
             "RNN": RNNStockModel,
             "LSTM": LSTMStockModel,
-            "GRU": GRUStockModel,
             "CNN": CNNStockModel,
             "SVR": SVRStockModel,
             "Transformers": TransformerStockModel,
