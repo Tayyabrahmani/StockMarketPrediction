@@ -5,6 +5,7 @@ from machine_learning_models.RNN import RNNStockModel
 from machine_learning_models.SVR import SVRStockModel
 from machine_learning_models.Transformers import TransformerStockModel
 from machine_learning_models.XGBoost import XGBoostStockModel
+from machine_learning_models.ARIMAXGB import DWT_ARIMA_GSXGB
 import traceback
 
 class MachineLearningFramework:
@@ -32,6 +33,7 @@ class MachineLearningFramework:
             "CNN": CNNStockModel,
             "SVR": SVRStockModel,
             "Transformers": TransformerStockModel,
+            "ARIMA-XGB": DWT_ARIMA_GSXGB,
         }
         self.selected_models = []
 
