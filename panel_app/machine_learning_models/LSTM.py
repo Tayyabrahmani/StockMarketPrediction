@@ -15,6 +15,7 @@ from machine_learning_models.preprocessing import (
 from machine_learning_models.evaluation import (
     predict_and_inverse_transform,
 )
+from skimage.restoration import denoise_wavelet
 import optuna
 from tensorflow.keras.models import Model, Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Bidirectional
@@ -76,7 +77,7 @@ class LSTMStockModel:
             data_val, sequence_length=self.sequence_length, target_col="Close", is_df=False
         )
 
-    def build_model(self, input_dim, hidden_dims, num_layers, dropout, bidirectional=False):
+    def build_model(self, input_dim, hidden_dims, num_layers, dropout, learning_rate, bidirectional=False):
         """
         Builds and initializes the LSTM model.
 
@@ -101,7 +102,7 @@ class LSTMStockModel:
 
         # Compile the model with gradient clipping
         self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001, clipnorm=1.0),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate, clipnorm=1.0),
             loss="mse",
             metrics=["mae"],
         )
@@ -168,7 +169,8 @@ class LSTMStockModel:
 
     def predict(self):
         """
-        Generates predictions for the test data and inverse transforms them.
+        Generates predictions for the test data, reverses the differencing to get the original scale, 
+        and returns the final predictions.
 
         Returns:
             np.array: Predictions in the original scale.
@@ -257,6 +259,7 @@ class LSTMStockModel:
             hidden_dims=[best_params[f"hidden_dim_{i}"] for i in range(best_params["num_layers"])],
             num_layers=best_params["num_layers"],
             dropout=best_params["dropout"],
+            learning_rate=best_params["learning_rate"],
         )
 
         print("Training the LSTM model...")
