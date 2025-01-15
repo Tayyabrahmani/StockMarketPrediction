@@ -131,13 +131,19 @@ class DWT_ARIMA_GSXGB:
                 float: Validation loss (MSE) for the given trial's hyperparameters.
             """
             # Suggest a broader range of hyperparameters
-            max_depth = trial.suggest_int("max_depth", 3, 15)
-            n_estimators = trial.suggest_int("n_estimators", 50, 1000)
-            min_child_weight = trial.suggest_int("min_child_weight", 1, 10)
-            learning_rate = trial.suggest_float("learning_rate", 0.01, 0.3)
-            gamma = trial.suggest_float("gamma", 0, 5)
-            subsample = trial.suggest_float("subsample", 0.5, 1.0)
-            colsample_bytree = trial.suggest_float("colsample_bytree", 0.5, 1.0)
+            params = {
+                "objective": "reg:squarederror",
+                "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.3, log=True),
+                "max_depth": trial.suggest_int("max_depth", 3, 10),
+                "subsample": trial.suggest_float("subsample", 0.5, 1.0),
+                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
+                "gamma": trial.suggest_float("gamma", 1e-3, 10.0, log=True),
+                "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
+                "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+                "random_state": 42,
+                "early_stopping_rounds": 15,
+            }
 
             # Align X_train and Nt
             min_length_train = min(len(self.X_train), len(self.Nt))
@@ -151,14 +157,7 @@ class DWT_ARIMA_GSXGB:
 
             # Train XGBoost with early stopping
             xgb = XGBRegressor(
-                max_depth=max_depth,
-                n_estimators=n_estimators,
-                min_child_weight=min_child_weight,
-                learning_rate=learning_rate,
-                gamma=gamma,
-                subsample=subsample,
-                colsample_bytree=colsample_bytree,
-                early_stopping_rounds=10,
+                **params
             )
             xgb.fit(
                 X_train, Nt_train,
@@ -168,7 +167,7 @@ class DWT_ARIMA_GSXGB:
 
             # Predict and calculate validation loss
             preds = xgb.predict(X_val)
-            loss = mean_squared_error(Nt_val, preds)
+            loss = np.sqrt(mean_squared_error(Nt_val, preds))
             return loss
 
         # Perform Optuna optimization
