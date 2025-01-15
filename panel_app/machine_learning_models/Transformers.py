@@ -1,6 +1,9 @@
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+import tensorflow as tf
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import (
+    Input, Dense, Dropout, LayerNormalization, MultiHeadAttention, Add, TimeDistributed
+)
+from tensorflow.keras.optimizers import Adam
 import os
 import pickle
 import pandas as pd
@@ -16,82 +19,31 @@ from machine_learning_models.preprocessing import (
 )
 from machine_learning_models.evaluation import predict_and_inverse_transform
 
-class PositionalEncoder(nn.Module):
-    def __init__(self, d_model, max_seq_len, dropout=0.1):
-        super(PositionalEncoder, self).__init__()
-        self.dropout = nn.Dropout(p=dropout)
+class PositionalEncoding(tf.keras.layers.Layer):
+    def __init__(self, d_model, max_seq_len):
+        super(PositionalEncoding, self).__init__()
+        self.positional_encoding = self._get_positional_encoding(d_model, max_seq_len)
 
-        position = torch.arange(0, max_seq_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
-        pe = torch.zeros(max_seq_len, d_model)
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe.unsqueeze(0))
+    def _get_positional_encoding(self, d_model, max_seq_len):
+        position = np.arange(max_seq_len)[:, np.newaxis]
+        div_term = np.exp(np.arange(0, d_model, 2) * -(np.log(10000.0) / d_model))
+        pe = np.zeros((max_seq_len, d_model))
+        pe[:, 0::2] = np.sin(position * div_term)
+        pe[:, 1::2] = np.cos(position * div_term)
+        return tf.constant(pe, dtype=tf.float32)
 
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
-        return self.dropout(x)
+    def call(self, x):
+        return x + self.positional_encoding[: tf.shape(x)[1], :]
 
+def transformer_encoder(inputs, d_model, n_heads, dim_feedforward, dropout):
+    attn_output = MultiHeadAttention(num_heads=n_heads, key_dim=d_model)(inputs, inputs)
+    attn_output = Dropout(dropout)(attn_output)
+    out1 = LayerNormalization(epsilon=1e-6)(inputs + attn_output)
 
-class TimeSeriesTransformer(nn.Module):
-    def __init__(
-        self,
-        input_size,
-        dec_seq_len,
-        max_seq_len,
-        out_seq_len,
-        d_model,
-        n_encoder_layers,
-        n_decoder_layers,
-        n_heads,
-        dim_feedforward,
-        dropout=0.1,
-    ):
-        super(TimeSeriesTransformer, self).__init__()
-        self.encoder_input_layer = nn.Linear(input_size, d_model)
-        self.decoder_input_layer = nn.Linear(input_size, d_model)
-        self.positional_encoding = PositionalEncoder(d_model, max_seq_len, dropout)
-
-        # Transformer encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_encoder_layers)
-
-        # Transformer decoder
-        decoder_layer = nn.TransformerDecoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=dim_feedforward,
-            dropout=dropout,
-            batch_first=True,
-        )
-        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_decoder_layers)
-
-        # Final output layer
-        self.linear_mapping = nn.Linear(d_model, 1)
-
-    def forward(self, src, tgt, src_mask=None, tgt_mask=None):
-        if src.ndim == 2:
-            src = src.unsqueeze(-1)  # Add a feature dimension if missing
-
-        src = self.encoder_input_layer(src)
-        src = self.positional_encoding(src)
-
-        encoder_output = self.encoder(src, src_key_padding_mask=src_mask)
-
-        tgt = self.decoder_input_layer(tgt)
-        tgt = self.positional_encoding(tgt)
-
-        decoder_output = self.decoder(
-            tgt=tgt, memory=encoder_output, tgt_mask=tgt_mask, memory_mask=src_mask
-        )
-
-        return self.linear_mapping(decoder_output[:, -1, :])
+    ffn_output = Dense(dim_feedforward, activation='relu')(out1)
+    ffn_output = Dense(d_model)(ffn_output)
+    ffn_output = Dropout(dropout)(ffn_output)
+    return LayerNormalization(epsilon=1e-6)(out1 + ffn_output)
 
 class TransformerStockModel:
     def __init__(self, file_path, stock_name, hyperparameters=None):
@@ -101,16 +53,15 @@ class TransformerStockModel:
             "dec_seq_len": 30,
             "max_seq_len": 500,
             "d_model": 64,
-            "n_encoder_layers": 4,
-            "n_decoder_layers": 4,
+            "n_encoder_layers": 2,
+            "n_decoder_layers": 2,
             "n_heads": 8,
             "dim_feedforward": 256,
             "dropout": 0.2,
             "learning_rate": 0.0001,
-            "epochs": 30, 
+            "epochs": 150, 
         }
         self.model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.sequence_length = 30
 
         # Load and preprocess data
@@ -126,8 +77,11 @@ class TransformerStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train
+        )
 
-        self.X_train, self.X_test, self.y_train, self.y_test, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.y_train, self.y_test, add_feature_dim=False)
+        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Add the last 29 rows (sequence length) from the train data to create sequences
         self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
@@ -136,101 +90,78 @@ class TransformerStockModel:
         # Concatenate features and targets for sequence creation (train)
         data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
         self.X_train, self.y_train = create_sequences(
-            data_train, sequence_length=30, target_col="Close", is_df=False
+            data_train, sequence_length=self.sequence_length, target_col="Close", is_df=False
         )
 
         # Concatenate features and targets for sequence creation (test)
         data_test = np.hstack([self.X_test, self.y_test.reshape(-1, 1)])
         self.X_test, self.y_test = create_sequences(
-            data_test, sequence_length=30, target_col="Close", is_df=False
+            data_test, sequence_length=self.sequence_length, target_col="Close", is_df=False
+        )
+
+        data_val = np.hstack([self.X_val, self.y_val.reshape(-1, 1)])
+        self.X_val, self.y_val = create_sequences(
+            data_val, sequence_length=self.sequence_length, target_col="Close", is_df=False
         )
 
     def build_model(self):
-        """
-        Builds and initializes the Transformer model.
-        """
-        input_size = self.X_train.shape[-1]
-        out_seq_len = self.X_test.shape[-1]
+        input_seq = Input(shape=(self.sequence_length, self.X_train.shape[-1]))
+        
+        # Encoder
+        enc_inputs = Dense(self.hyperparameters["d_model"])(input_seq)
+        enc_inputs = PositionalEncoding(
+            self.hyperparameters["d_model"], self.hyperparameters["max_seq_len"]
+        )(enc_inputs)
 
-        self.model = TimeSeriesTransformer(
-            input_size=input_size,
-            dec_seq_len=self.hyperparameters["dec_seq_len"],
-            max_seq_len=self.hyperparameters["max_seq_len"], 
-            out_seq_len=out_seq_len,
-            d_model=self.hyperparameters["d_model"],
-            n_encoder_layers=self.hyperparameters["n_encoder_layers"],
-            n_decoder_layers=self.hyperparameters["n_decoder_layers"], 
-            n_heads=self.hyperparameters["n_heads"], 
-            dim_feedforward=self.hyperparameters["dim_feedforward"], 
-            dropout=self.hyperparameters["dropout"], 
-        )
-        return self.model
+        for _ in range(self.hyperparameters["n_encoder_layers"]):
+            enc_inputs = transformer_encoder(
+                enc_inputs,
+                self.hyperparameters["d_model"],
+                self.hyperparameters["n_heads"],
+                self.hyperparameters["dim_feedforward"],
+                self.hyperparameters["dropout"],
+            )
+        
+        # Decoder (same input as encoder)
+        dec_inputs = Dense(self.hyperparameters["d_model"])(input_seq)  # Use the same sequence
+        dec_inputs = PositionalEncoding(
+            self.hyperparameters["d_model"], self.hyperparameters["max_seq_len"]
+        )(dec_inputs)
+
+        for _ in range(self.hyperparameters["n_encoder_layers"]):
+            dec_inputs = transformer_encoder(
+                dec_inputs,
+                self.hyperparameters["d_model"],
+                self.hyperparameters["n_heads"],
+                self.hyperparameters["dim_feedforward"],
+                self.hyperparameters["dropout"],
+            )
+
+        # Output Layer
+        outputs = TimeDistributed(Dense(1))(dec_inputs)
+        self.model = Model(input_seq, outputs)  # Single input now
+        self.model.compile(optimizer=Adam(learning_rate=self.hyperparameters["learning_rate"]),
+                        loss="mse")
 
     def train(self, batch_size):
         """
         Trains the Transformer model.
         """
-        train_loader = self._get_data_loader(self.X_train, self.y_train, batch_size=batch_size)
-
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
-        criterion = nn.MSELoss()
-
-        # Move model to device (GPU if available)
-        self.model.to(self.device)
-
-        for epoch in range(self.hyperparameters["epochs"]):
-            self.model.train()
-            epoch_loss = 0
-
-            for X_batch, y_batch in train_loader:
-                X_batch, y_batch = X_batch.to(self.device), y_batch.to(self.device)
-                src = X_batch[:, :-1,]  # Shape: (batch_size, seq_len, num_features)
-                tgt = X_batch[:, 1:]
-                optimizer.zero_grad()
-                predictions = self.model(src, tgt)
-                loss = criterion(predictions, y_batch)
-                loss.backward()
-                optimizer.step()
-                epoch_loss += loss.item()
-            print(f"Epoch {epoch + 1}/{self.hyperparameters['epochs']}, Loss: {epoch_loss / len(train_loader):.4f}")
-
-    def _get_data_loader(self, X, y, batch_size):
-        """
-        Creates a DataLoader for the given data.
-        """
-        dataset = torch.utils.data.TensorDataset(
-            torch.tensor(X, dtype=torch.float32).to(self.device), 
-            torch.tensor(y, dtype=torch.float32).unsqueeze(-1).to(self.device)
+        self.model.fit(
+            self.X_train,  # Single input sequence
+            self.y_train,
+            batch_size=batch_size,
+            epochs=self.hyperparameters["epochs"],
         )
-        return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     def predict(self):
         """
-        Generates predictions for the test data and maps them back to the original stock price range.
-
-        Returns:
-            np.array: Predicted values for the test data in the original stock price range.
+        Generates predictions for the test data.
         """
-        self.model.eval()
-
-        # Ensure the test data is on the correct device
-        X_test_tensor = torch.tensor(self.X_test, dtype=torch.float32).to(self.device)
-        src = X_test_tensor[:, :-1, :]  # Input sequence
-        tgt = X_test_tensor[:, 1:, :]   # Placeholder target sequence
-
-        with torch.no_grad():
-            predictions = self.model(src, tgt)
-    
-        # Inverse transform predictions back to original scale
-        predictions_original_scale = self.target_scaler.inverse_transform(
-            predictions.cpu().numpy().reshape(-1, predictions.shape[-1])
-        )
-
-        # Reshape back to match (n_samples, out_seq_len)
-        predictions_original_scale = predictions_original_scale.reshape(
-            X_test_tensor.shape[0], -1
-        )
-        return predictions_original_scale
+        predictions = self.model.predict(self.X_test, verbose=1)  # Single input sequence
+        predictions = self.target_scaler.inverse_transform(predictions.squeeze())
+        # predictions = self.target_scaler.inverse_transform(predictions.reshape(-1, 1)).flatten()
+        return predictions
 
     def save_model(self):
         """
@@ -238,9 +169,8 @@ class TransformerStockModel:
         """
         model_dir = "Output_Data/saved_models"
         os.makedirs(model_dir, exist_ok=True)
-        model_path = os.path.join(model_dir, f"{self.stock_name}_transformer_model.pkl")
-        with open(model_path, "wb") as f:
-            pickle.dump(self.model, f)
+        model_path = os.path.join(model_dir, f"{self.stock_name}_transformer_model.keras")
+        self.model.save(model_path)
 
     def save_predictions(self, predictions):
         """
@@ -253,10 +183,15 @@ class TransformerStockModel:
         os.makedirs(prediction_dir, exist_ok=True)
         prediction_path = os.path.join(prediction_dir, f"Transformer_{self.stock_name}_predictions.csv")
 
-        # Save actual vs predicted values
+        final_predictions = predictions[:, -1]  # Extract last timestep predictions
+        num_predictions = len(final_predictions)
+        dates = pd.to_datetime(self.data.index[-num_predictions:])  # Ensure consistent lengths
+
+        print(f"Dates length: {len(dates)}")
+        print(f"Predictions length: {len(final_predictions)}")
         prediction_df = pd.DataFrame({
-            "Date": pd.to_datetime(self.data.index[-len(predictions):]),
-            "Predicted Close": predictions.flatten(),
+            "Date": dates,
+            "Predicted Close": final_predictions,
         })
         prediction_df.to_csv(prediction_path, index=False)
 
