@@ -83,6 +83,10 @@ class CrossformerStockModel:
             self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False
         )
 
+        # Add the last 29 rows (sequence length) from the train data to create sequences
+        self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
+        self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
         # Flatten target arrays to ensure they are 1D
         self.y_train = self.y_train.ravel()
         self.y_test = self.y_test.ravel()
