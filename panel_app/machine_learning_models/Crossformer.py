@@ -19,6 +19,7 @@ from machine_learning_models.preprocessing import (
     fill_na_values,
     extract_date_features,
 )
+from torch.amp import autocast, GradScaler
 
 class TimeSeriesDataset(Dataset):
     def __init__(self, data, sequence_length):
@@ -39,16 +40,16 @@ class CrossformerStockModel:
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
             "d_model": 64,
-            "d_ff": 128,
+            "d_ff": 256,
             "n_heads": 4,
-            "e_layers": 2,
+            "e_layers": 1,
             "dropout": 0.1,
             "learning_rate": 0.001,
             "batch_size": 32,
             "train_epochs": 50,
             "patience": 5,
             "seg_len": 6,
-            "win_size": 2,
+            "win_size": 3,
             "factor": 10,
         }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -102,13 +103,13 @@ class CrossformerStockModel:
         self.test_dataset = TimeSeriesDataset(test_data, self.sequence_length)
 
         self.train_loader = DataLoader(
-            self.train_dataset, batch_size=self.hyperparameters["batch_size"], shuffle=True
+            self.train_dataset, batch_size=self.hyperparameters["batch_size"], shuffle=True, pin_memory=True
         )
         self.val_loader = DataLoader(
-            self.val_dataset, batch_size=self.hyperparameters["batch_size"], shuffle=False
+            self.val_dataset, batch_size=self.hyperparameters["batch_size"], shuffle=False, pin_memory=True
         )
         self.test_loader = DataLoader(
-            self.test_dataset, batch_size=self.hyperparameters["batch_size"], shuffle=False
+            self.test_dataset, batch_size=self.hyperparameters["batch_size"], shuffle=False, pin_memory=True
         )
         self._build_model()
 
@@ -138,30 +139,39 @@ class CrossformerStockModel:
             self.model = nn.DataParallel(self.model)
 
     def train(self):
-        model_optim = optim.Adam(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
+        model_optim = optim.AdamW(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
         criterion = nn.MSELoss()
         early_stopping = EarlyStopping(patience=self.hyperparameters["patience"], verbose=True)
 
         checkpoint_dir = os.path.join("checkpoints", self.stock_name)
         os.makedirs(checkpoint_dir, exist_ok=True)
 
+        scaler = GradScaler()
+
         print("[Training] Starting training loop...")
         for epoch in range(self.hyperparameters["train_epochs"]):
             self.model.train()
             train_losses = []
-
+            
             for batch_x, batch_y in self.train_loader:
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
                 model_optim.zero_grad()
-                pred = self.model(batch_x)
-                pred = pred[:, :, 0].squeeze(-1)
 
-                loss = criterion(pred, batch_y)
+                # Mixed precision
+                with autocast(device_type="cuda"):  # Automatically uses float16 precision for computations
+                    pred = self.model(batch_x)
+                    pred = pred[:, :, 0].squeeze(-1)
+
+                    loss = criterion(pred, batch_y)
+                
+                # Scales the loss and calls backward
+                scaler.scale(loss).backward()
+                scaler.step(model_optim)
+                scaler.update()
+
                 train_losses.append(loss.item())
-                loss.backward()
-                model_optim.step()
 
             train_loss_mean = sum(train_losses) / len(train_losses)
             val_loss = self._validate(criterion)
