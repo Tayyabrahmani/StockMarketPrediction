@@ -1,6 +1,7 @@
 import os
 import json
 import pickle
+import optuna
 import pandas as pd
 import numpy as np
 import torch
@@ -39,7 +40,7 @@ class CrossformerStockModel:
         self.file_path = file_path
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
-            "d_model": 64,
+            "d_model": 32,
             "d_ff": 256,
             "n_heads": 4,
             "e_layers": 1,
@@ -174,7 +175,7 @@ class CrossformerStockModel:
                 train_losses.append(loss.item())
 
             train_loss_mean = sum(train_losses) / len(train_losses)
-            val_loss = self._validate(criterion)
+            val_loss = self._validate(self.val_loader, criterion)
 
             print(
                 f"[Epoch {epoch + 1}/{self.hyperparameters['train_epochs']}] "
@@ -190,12 +191,12 @@ class CrossformerStockModel:
             # Adjust learning rate
             adjust_learning_rate(model_optim, epoch + 1, self.hyperparameters["learning_rate"], lradj='type1')
 
-    def _validate(self, criterion):
+    def _validate(self, val_loader, criterion):
         self.model.eval()
         val_losses = []
 
         with torch.no_grad():
-            for batch_x, batch_y in self.val_loader:
+            for batch_x, batch_y in val_loader:
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
 
@@ -216,6 +217,91 @@ class CrossformerStockModel:
         batch_y = batch_y.float().to(self.device)
         outputs = self.model(batch_x)
         return outputs, batch_y
+
+    def optimize_hyperparameters(self, n_trials=50):
+        """
+        Optimize hyperparameters using Optuna and update self.hyperparameters.
+
+        Parameters:
+            n_trials (int): Number of trials to run for optimization.
+
+        Returns:
+            dict: Best hyperparameters found during optimization.
+        """
+        def objective(trial):
+            # Define the search space
+            d_model = trial.suggest_categorical("d_model", [32, 64, 128])
+            d_ff = trial.suggest_int("d_ff", 128, 512, step=64)
+            n_heads = trial.suggest_categorical("n_heads", [2, 4, 8])
+            e_layers = trial.suggest_int("e_layers", 1, 4)
+            dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.1)
+            learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+            batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
+            seg_len = trial.suggest_int("seg_len", 6, 12, step=2)
+
+            # Temporarily update self.hyperparameters for the trial
+            self.hyperparameters = {
+                "d_model": d_model,
+                "d_ff": d_ff,
+                "n_heads": n_heads,
+                "e_layers": e_layers,
+                "dropout": dropout,
+                "learning_rate": learning_rate,
+                "batch_size": batch_size,
+                "train_epochs": 30,
+                "patience": 5,
+                "seg_len": seg_len,
+                "win_size": 2,
+                "factor": 10,
+            }
+
+            # Build and validate the model
+            self._build_model()
+            train_loader = DataLoader(
+                self.train_dataset,
+                batch_size=batch_size,
+                shuffle=True,
+                pin_memory=True,
+            )
+            val_loader = DataLoader(
+                self.val_dataset,
+                batch_size=batch_size,
+                shuffle=False,
+                pin_memory=True,
+            )
+            criterion = nn.MSELoss()
+            model_optim = optim.AdamW(self.model.parameters(), lr=learning_rate)
+            scaler = GradScaler()
+
+            for epoch in range(self.hyperparameters["train_epochs"]):
+                self.model.train()
+                for batch_x, batch_y in train_loader:
+                    batch_x = batch_x.float().to(self.device)
+                    batch_y = batch_y.float().to(self.device)
+
+                    model_optim.zero_grad()
+                    with autocast(device_type="cuda"):
+                        pred = self.model(batch_x)
+                        pred = pred[:, :, 0].squeeze(-1)
+                        loss = criterion(pred, batch_y)
+
+                    scaler.scale(loss).backward()
+                    scaler.step(model_optim)
+                    scaler.update()
+
+                val_loss = self._validate(val_loader, criterion)
+                if epoch >= self.hyperparameters["patience"]:
+                    break
+
+            return val_loss
+
+        # Run Optuna study
+        study = optuna.create_study(direction="minimize")
+        study.optimize(objective, n_trials=n_trials)
+
+        # Update self.hyperparameters with the best ones
+        self.hyperparameters.update(study.best_params)
+        print("Best Hyperparameters Found:", study.best_params)
 
     def predict(self):
         self.model.eval()
@@ -263,6 +349,8 @@ class CrossformerStockModel:
         """
         Runs the training, testing, and saves the results.
         """
+        print(f"Optimizing Hyperparameters")
+        # self.optimize_hyperparameters(n_trials=20)
         print(f"Training Crossformer model for {self.stock_name}...")
         self.train()
         predictions = self.predict()
