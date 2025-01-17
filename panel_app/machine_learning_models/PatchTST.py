@@ -21,7 +21,7 @@ class PatchTSTStockModel:
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
             "context_length": 64,
-            "forecast_horizon": 5,
+            "forecast_horizon": 3,
             "patch_len": 16,
             "stride": 8,
             "n_layers": 3,
@@ -30,8 +30,8 @@ class PatchTSTStockModel:
             "d_ff": 256,
             "dropout": 0.2,
             "batch_size": 32,
-            "num_epochs": 20,
-            "learning_rate": 0.001,
+            "num_epochs": 30,
+            "learning_rate": 0.0001,
         }
 
     def prepare_data(self):
@@ -114,17 +114,13 @@ class PatchTSTStockModel:
         preds, *_ = self.learn.get_X_preds(self.X[self.splits[2]])
         preds = preds.squeeze(-1).numpy()  # Ensure predictions are 2D
 
-        # Extract the predictions for the "Close" column
-        preds_df = pd.DataFrame(preds[:, :, -1], columns=self.df.columns)
-
-        # Apply inverse transform using the scaler
-        if hasattr(self.scaler, 'inverse_transform'):
-            preds_df = self.scaler.inverse_transform(preds_df)
-
         # Extract the target variable (predicted Close price)
-        preds = preds_df["Close"].values.flatten()
+        preds_df = pd.DataFrame(preds[:, :, 0], columns=self.df.columns)
+        # preds_df = pd.DataFrame(preds.mean(axis=2), columns=self.df.columns)
 
-        return preds
+        preds_df = self.scaler.inverse_transform(preds_df)
+        preds_df = preds_df["Close"].values.flatten()
+        return preds_df
 
     def save_predictions(self, preds):
         """
