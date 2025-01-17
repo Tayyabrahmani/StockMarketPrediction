@@ -20,7 +20,7 @@ from machine_learning_models.preprocessing import (
     fill_na_values,
     extract_date_features,
 )
-from torch.amp import autocast, GradScaler
+from torch.cuda.amp import autocast, GradScaler
 
 class TimeSeriesDataset(Dataset):
     def __init__(self, data, sequence_length):
