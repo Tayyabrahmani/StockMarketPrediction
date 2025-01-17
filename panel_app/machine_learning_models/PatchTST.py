@@ -10,6 +10,7 @@ from machine_learning_models.preprocessing import (
     fill_na_values,
     extract_date_features,
 )
+from fastai.callback.tracker import EarlyStoppingCallback
 
 class PatchTSTStockModel:
     def __init__(self, file_path, stock_name, hyperparameters=None):
@@ -20,17 +21,17 @@ class PatchTSTStockModel:
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
             "context_length": 64,
-            "forecast_horizon": 1,
+            "forecast_horizon": 5,
             "patch_len": 16,
             "stride": 8,
             "n_layers": 3,
             "n_heads": 4,
-            "d_model": 128,
+            "d_model": 64,
             "d_ff": 256,
             "dropout": 0.2,
             "batch_size": 32,
-            "num_epochs": 50,
-            "learning_rate": 2e-3,
+            "num_epochs": 20,
+            "learning_rate": 0.001,
         }
 
     def prepare_data(self):
@@ -43,23 +44,23 @@ class PatchTSTStockModel:
         df = fill_na_values(df)
         df = extract_date_features(df)
 
-        # Preprocessing pipeline
-        preproc_pipe = Pipeline([
-            ("fill_missing", TSFillMissing(columns=df.columns, method="ffill", value=0)),
-            ("scaler", TSStandardScaler(columns=df.columns)),
-        ])
-        df = preproc_pipe.fit_transform(df)
-        self.scaler = preproc_pipe.named_steps["scaler"]
-
         # Define splits
         splits = get_forecasting_splits(df, 
                                         fcst_history=self.hyperparameters["context_length"],
                                         fcst_horizon=self.hyperparameters["forecast_horizon"],
                                         valid_size=0.1,
-                                        test_size=0.02,
+                                        test_size=82,
                                         )
-        
+
         self.splits = splits
+
+        # Fit scaler on training data only
+        train_df = df.iloc[self.splits[0]]  # Training data
+        self.scaler = TSStandardScaler(columns=df.columns).fit(train_df)
+
+        # Apply scaling to the entire dataset
+        df = self.scaler.transform(df)
+
         self.df = df
 
         # Sliding window
@@ -96,8 +97,13 @@ class PatchTSTStockModel:
                             metrics=[mae, mse], 
                             batch_size=self.hyperparameters["batch_size"])
 
+        # Add EarlyStoppingCallback
+        early_stopping = EarlyStoppingCallback(monitor='valid_loss', patience=5, min_delta=1e-4)
+
         # Training
-        learn.fit_one_cycle(self.hyperparameters["num_epochs"], lr_max=self.hyperparameters["learning_rate"])
+        learn.fit_one_cycle(self.hyperparameters["num_epochs"], 
+                            lr_max=self.hyperparameters["learning_rate"],
+                            cbs=[early_stopping])
         self.learn = learn
 
     def predict(self):
@@ -105,16 +111,16 @@ class PatchTSTStockModel:
         Generates predictions for the test dataset and applies inverse transform if necessary.
         """
         # Get predictions from the model
-        preds, targets, _ = self.learn.get_X_preds(self.X[self.splits[2]], self.y[self.splits[2]])
+        preds, *_ = self.learn.get_X_preds(self.X[self.splits[2]])
         preds = preds.squeeze(-1).numpy()  # Ensure predictions are 2D
 
-        # Convert predictions to DataFrame with correct columns
-        preds_df = pd.DataFrame(preds, columns=self.df.columns)  # Use same columns as during scaling
+        # Extract the predictions for the "Close" column
+        preds_df = pd.DataFrame(preds[:, :, -1], columns=self.df.columns)
 
         # Apply inverse transform using the scaler
         if hasattr(self.scaler, 'inverse_transform'):
             preds_df = self.scaler.inverse_transform(preds_df)
-        
+
         # Extract the target variable (predicted Close price)
         preds = preds_df["Close"].values.flatten()
 
