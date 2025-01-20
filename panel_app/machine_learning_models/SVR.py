@@ -204,7 +204,7 @@ class SVRStockModel:
         })
         prediction_df.to_csv(prediction_path, index=False)
 
-    def optimize_hyperparameters(self):
+    def optimize_hyperparameters(self, n_trials=20):
         """
         Optimizes SVR hyperparameters using Optuna.
 
@@ -234,7 +234,7 @@ class SVRStockModel:
 
         # Use Optuna to optimize the objective function
         study = optuna.create_study(direction="minimize")
-        study.optimize(objective, n_trials=5)
+        study.optimize(objective, n_trials=n_trials)
 
         # Get the best hyperparameters
         best_params = study.best_params
@@ -249,7 +249,7 @@ class SVRStockModel:
         # self.select_features(top_k=25, rfe_features=5)
 
         print(f"Optimizing hyperparameters for {self.stock_name}...")
-        best_params = self.optimize_hyperparameters()
+        best_params = self.optimize_hyperparameters(n_trials=20)
 
         # Set the model with the best hyperparameters
         self.model = SVR(
