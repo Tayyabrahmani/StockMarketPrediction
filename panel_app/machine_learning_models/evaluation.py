@@ -39,6 +39,7 @@ def evaluate_models(predictions_dir, actual_data_dir):
         pd.DataFrame: DataFrame containing evaluation metrics for all models.
     """
     metrics_list = []
+    stock_metrics = {}
 
     # Iterate over all prediction files
     for pred_file in os.listdir(predictions_dir):
@@ -83,11 +84,17 @@ def evaluate_models(predictions_dir, actual_data_dir):
             **metrics_dict,
         })
 
+        # Collect metrics by stock
+        if stock_name not in stock_metrics:
+            stock_metrics[stock_name] = []
+        stock_metrics[stock_name].append({"Model": model_name, **metrics_dict})
+
     metrics_table = pd.DataFrame(metrics_list)
     metrics_table = metrics_table.round(3)
-    return metrics_table
+    metrics_table = metrics_table.sort_values(["Stock", "Model"])
+    return metrics_table, stock_metrics
 
-def save_metrics_table(metrics_df, output_dir="Output_Data"):
+def save_metrics_table(metrics_df, stock_metrics, output_dir="Output_Data"):
     """
     Saves the metrics table to a CSV file.
 
@@ -95,30 +102,19 @@ def save_metrics_table(metrics_df, output_dir="Output_Data"):
         metrics_df (pd.DataFrame): DataFrame containing metrics for all models.
         output_dir (str): Directory to save the metrics table.
     """
-    os.makedirs(output_dir, exist_ok=True)
-    metrics_path = os.path.join(output_dir, "model_metrics.csv")
-    metrics_df.to_csv(metrics_path, index=False)
-    print(f"Metrics table saved to {metrics_path}")
+    overall_metrics_dir = os.path.join(output_dir, "saved_metrics")
+    os.makedirs(overall_metrics_dir, exist_ok=True)
 
-def visualize_predictions(y_true, y_pred, title="Prediction Results"):
-    """
-    Visualizes predictions against ground truth.
+    overall_metrics_path = os.path.join(output_dir, "model_metrics.csv")
+    metrics_df.to_csv(overall_metrics_path, index=False)
+    print(f"Overall metrics table saved to {overall_metrics_path}")
 
-    Parameters:
-        y_true (np.array): Ground truth values.
-        y_pred (np.array): Predicted values.
-        title (str): Title of the plot.
-    """
-    plt.figure(figsize=(10, 6))
-    plt.plot(y_true, label="Actual", marker='o')
-    plt.plot(y_pred, label="Predicted", marker='x')
-    plt.title(title)
-    plt.xlabel("Time Steps")
-    plt.ylabel("Stock Price")
-    plt.legend()
-    plt.grid()
-    plt.show()
-
+    # Save individual stock metrics
+    for stock, metrics in stock_metrics.items():
+        stock_metrics_path = os.path.join(overall_metrics_dir, f"{stock}_metrics.csv")
+        stock_metrics_df = pd.DataFrame(metrics).round(3)
+        stock_metrics_df.to_csv(stock_metrics_path, index=False)
+        print(f"Metrics for stock {stock} saved to {stock_metrics_path}")
 
 def predict_and_inverse_transform(model, X, scaler, feature_dim):
     """
@@ -154,10 +150,10 @@ if __name__ == "__main__":
     actual_data_dir = "Input_Data/Processed_Files_Step1"
 
     # Evaluate models and generate metrics table
-    metrics_df = evaluate_models(predictions_dir, actual_data_dir)
+    metrics_df, stock_metrics = evaluate_models(predictions_dir, actual_data_dir)
 
     # Save metrics table
-    save_metrics_table(metrics_df)
+    save_metrics_table(metrics_df, stock_metrics)
 
     print("\nEvaluation Metrics for All Models:")
     print(metrics_df)
