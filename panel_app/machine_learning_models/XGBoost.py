@@ -34,10 +34,15 @@ class XGBoostStockModel:
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
             "objective": "reg:squarederror",
-            "n_estimators": 100,
-            "learning_rate": 0.1,
+            "n_estimators": 500,
+            "learning_rate": 0.05,
             "max_depth": 5,
-            "random_state": 42
+            "subsample": 0.5,
+            "colsample_bytree": 0.82,
+            "gamma": 0.08,
+            "reg_alpha": 0.12,
+            "reg_lambda": 0.003,
+            "random_state": 42,
         }
 
         # Load data and handle technical indicators
@@ -51,7 +56,9 @@ class XGBoostStockModel:
         self.features = self.features.drop(columns=['Close'], errors='ignore')
     
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(self.features, self.target)
-        self.model = None
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train
+        )
 
     def perform_time_series_cv(self):
         """
@@ -63,13 +70,12 @@ class XGBoostStockModel:
         print("Performing time series cross-validation...")
         
         # Define time series split
-        tscv = TimeSeriesSplit(n_splits=10)
+        tscv = TimeSeriesSplit(n_splits=5)
         
         # Define custom RMSE scorer
         rmse_scorer = make_scorer(rmse, greater_is_better=False)
 
         # Perform cross-validation
-        self.hyperparameters.setdefault("tree_method", "hist")
         xgb_regressor = xgb.XGBRegressor(**self.hyperparameters)
 
         # Convert training data to NumPy arrays for compatibility
@@ -131,6 +137,10 @@ class XGBoostStockModel:
             self.features, self.target
         )
 
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train
+        )
+
     def optimize_hyperparameters(self, n_trials=50):
         """
         Uses Optuna to find the best hyperparameters for the XGBoost model.
@@ -145,28 +155,27 @@ class XGBoostStockModel:
             # Define the hyperparameter search space
             params = {
                 "objective": "reg:squarederror",
-                "n_estimators": trial.suggest_int("n_estimators", 50, 500),
-                "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+                "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
+                "learning_rate": trial.suggest_float("learning_rate", 0.005, 0.3, log=True),
                 "max_depth": trial.suggest_int("max_depth", 3, 10),
-                "min_child_weight": trial.suggest_float("min_child_weight", 1e-3, 10.0, log=True),
                 "subsample": trial.suggest_float("subsample", 0.5, 1.0),
                 "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
                 "gamma": trial.suggest_float("gamma", 1e-3, 10.0, log=True),
                 "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
                 "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
                 "random_state": 42,
-                "early_stopping_rounds": 10,
+                "early_stopping_rounds": 15,
             }
 
             # Train and validate the model
             model = xgb.XGBRegressor(**params)
             model.fit(
                 self.X_train, self.y_train,
-                eval_set=[(self.X_test, self.y_test)],
-                verbose=False
+                eval_set=[(self.X_val, self.y_val)],
+                verbose=False,
             )
-            predictions = model.predict(self.X_test)
-            rmse = np.sqrt(mean_squared_error(self.y_test, predictions))
+            predictions = model.predict(self.X_val)
+            rmse = np.sqrt(mean_squared_error(self.y_val, predictions))
             return rmse
 
         # Create an Optuna study
@@ -178,7 +187,7 @@ class XGBoostStockModel:
         self.hyperparameters = study.best_params
         return study.best_params
 
-    def train(self, optimize=True, n_trials=50, cross_validate=True, num_features=30):
+    def train(self):
         """
         Trains the XGBoost model.
 
@@ -186,20 +195,7 @@ class XGBoostStockModel:
             optimize (bool): Whether to run hyperparameter optimization before training.
             n_trials (int): Number of trials for hyperparameter optimization if `optimize` is True.
         """
-        # Select relevant features before training
-        print("Selecting relevant features...")
-        self.select_relevant_features(num_features, method="shap")
-
-        if optimize:
-            print("Optimizing hyperparameters...")
-            self.optimize_hyperparameters(n_trials)
-            print("Optimal hyperparameters found:", self.hyperparameters)
-
         self.model = xgb.XGBRegressor(**self.hyperparameters)
-
-        if cross_validate:
-            self.perform_time_series_cv()
-
         print("Training the model on full training data...")
         self.model.fit(self.X_train, self.y_train)
         return self.model
@@ -245,6 +241,18 @@ class XGBoostStockModel:
         """
         Runs the full pipeline: trains the model, evaluates it, saves the model and predictions.
         """
+        # Select relevant features before training
+        print("Selecting relevant features...")
+        self.select_relevant_features(num_features=30, method="shap")
+
+        print("Optimizing hyperparameters...")
+        self.optimize_hyperparameters(n_trials=50)
+        print("Optimal hyperparameters found:", self.hyperparameters)
+
+        print("Performing Time series CV...")
+        self.perform_time_series_cv()
+        print("Completed Time series CV...")
+
         print(f"Training XGBoost model for {self.stock_name}...")
         self.train()
         metrics = self.evaluate()
