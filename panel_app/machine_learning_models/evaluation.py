@@ -66,7 +66,21 @@ def evaluate_predictions(y_true, y_pred):
     evs = explained_variance_score(y_true, y_pred)
     residuals = y_true - y_pred
     dw_stat = durbin_watson(residuals) 
-    return {"MAE": mae, "RMSE": rmse, "R²": r2, "SMAPE": smape, "EVS": evs, "Durbin-Watson": dw_stat}
+
+    # Calculate Mean Directional Accuracy (MDA)
+    actual_direction = np.sign(y_true.diff().fillna(0))
+    predicted_direction = np.sign(y_pred.diff().fillna(0))
+    mda = (actual_direction == predicted_direction).mean() * 100
+
+    return {
+        # "MAE": mae,
+        "RMSE": rmse,
+        # "R²": r2,
+        "SMAPE": smape,
+        "EVS": evs,
+        "Durbin-Watson": dw_stat,
+        "MDA": mda,  # Add MDA to metrics
+    }
 
 def evaluate_models(predictions_dir, actual_data_dir):
     """
