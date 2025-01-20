@@ -6,6 +6,47 @@ import torch
 import torch.nn as nn
 import os
 import pandas as pd
+import shap
+
+def plot_shap_feature_importance(model, X_train, feature_names, stock_name):
+    """
+    Plots and saves the SHAP feature importance based on SHAP values.
+
+    Parameters:
+        model: Trained model (e.g., SVR).
+        X_train (np.array): Training features (scaled).
+        feature_names (list or pd.Index): Names of the features.
+        stock_name (str): Name of the stock for labeling the plot.
+
+    Returns:
+        None
+    """
+
+    random_indices = np.random.choice(X_train.shape[0], 50, replace=False)
+    X_train = X_train[random_indices]
+
+    # Ensure SHAP supports the model type
+    explainer = shap.Explainer(model.predict, X_train)
+    shap_values = explainer(X_train)
+
+    # Generate summary plot
+    plt.figure()
+    shap.summary_plot(shap_values, X_train, feature_names=feature_names, plot_type="bar", show=False)
+
+    # Customize the plot title
+    plt.title(f"SHAP Feature Importance for {stock_name}")
+    plt.tight_layout()
+
+    # Save the plot
+    output_dir = "Output_Data/saved_feature_importance"
+    os.makedirs(output_dir, exist_ok=True)
+    plot_path = os.path.join(output_dir, f"SHAP_{stock_name}_feature_importance.png")
+    plt.savefig(plot_path, dpi=300)
+
+    # Show the plot
+    plt.show()
+
+    print(f"SHAP feature importance plot saved to: {plot_path}")
 
 def evaluate_predictions(y_true, y_pred):
     """
