@@ -7,6 +7,7 @@ import torch.nn as nn
 import os
 import pandas as pd
 import shap
+import argparse
 
 def plot_shap_feature_importance(model, X_train, feature_names, stock_name):
     """
@@ -200,6 +201,18 @@ def predict_and_inverse_transform(model, X, scaler, feature_dim):
     return original_scale[:, -1]
 
 if __name__ == "__main__":
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Evaluate models and save metrics.")
+    parser.add_argument(
+        "--filter",
+        type=str,
+        default="Alphabet Inc",
+        help="Filter by a specific model or stock name (optional).",
+    )
+
+    # Parse the arguments
+    args = parser.parse_args()
+
     # Define paths
     predictions_dir = "Output_Data/saved_predictions"
     actual_data_dir = "Input_Data/Processed_Files_Step1"
@@ -211,4 +224,6 @@ if __name__ == "__main__":
     save_metrics_table(metrics_df, stock_metrics)
 
     print("\nEvaluation Metrics for All Models:")
-    print(metrics_df)
+
+    filtered_metrics = metrics_df[metrics_df["Stock"] == args.filter]
+    print(filtered_metrics)
