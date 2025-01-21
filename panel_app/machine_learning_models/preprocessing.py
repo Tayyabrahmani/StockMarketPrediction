@@ -3,6 +3,7 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.model_selection import train_test_split
 lags = [1, 2, 3, 7, 14, 28]
+rolling_window = [7, 14]
 
 def load_data(file_path):
     """
@@ -43,8 +44,9 @@ def create_lagged_features(df, target_col='Close', lags=lags, rolling_window=Non
     for lag in lags:
         df[f"{target_col}_lag_{lag}"] = df[target_col].shift(lag)
     if rolling_window:
-        df[f"{target_col}_roll_mean"] = df[target_col].rolling(window=rolling_window).mean()
-        df[f"{target_col}_roll_std"] = df[target_col].rolling(window=rolling_window).std()
+        for roll_window in rolling_window:
+            df[f"{target_col}_roll_mean_{roll_window}"] = df[target_col].rolling(window=roll_window).mean()
+            df[f"{target_col}_roll_std_{roll_window}"] = df[target_col].rolling(window=roll_window).std()
     return df
 
 def extract_date_features(df, date_column='Exchange Date'):
@@ -145,8 +147,8 @@ def preprocess_data(X_train, X_test, X_val, y_train, y_test, y_val, add_feature_
                and the fitted scalers (feature_scaler, target_scaler).
     """
     # Initialize scalers
-    feature_scaler = StandardScaler()
-    target_scaler = StandardScaler()
+    feature_scaler = MinMaxScaler()
+    target_scaler = MinMaxScaler()
 
     # Convert to NumPy arrays
     X_train = X_train.values if isinstance(X_train, pd.DataFrame) else X_train
@@ -184,7 +186,7 @@ def preprocess_data(X_train, X_test, X_val, y_train, y_test, y_val, add_feature_
 
     return X_train_scaled, X_test_scaled, X_val_scaled, y_train_scaled, y_test_scaled, y_val_scaled, feature_scaler, target_scaler
 
-def create_sequences(df, sequence_length=30, target_col="Close", is_df=True):
+def create_sequences(df, sequence_length=30, target_col="Close", is_df=True, is_transformers=False):
     """
     Creates sequences from the data for time series forecasting.
 
@@ -200,28 +202,15 @@ def create_sequences(df, sequence_length=30, target_col="Close", is_df=True):
 
     X, y = [], []
     for i in range(len(df) - sequence_length):
+        if is_transformers:
         # X.append(df[i:i + sequence_length, :-1])
-        X.append(df[i+1:i + sequence_length + 1, :-1])
-        y.append(df[i + sequence_length, -1])
+        # X.append(df[i+1:i + sequence_length + 1, :-1])
+            X.append(df[i:i + sequence_length, :])
+            y.append(df[i + sequence_length, -1])
+        else:
+            X.append(df[i:i + sequence_length, :-1])
+            y.append(df[i + sequence_length, -1])
     return np.array(X), np.array(y)
-
-def create_sequences_transformer(data, sequence_length, target_col):
-    sequences = []
-    targets = []
-
-    for i in range(len(data) - sequence_length):
-        seq = data.iloc[i:i+sequence_length].drop(columns=[target_col]).values
-        target = data.iloc[i+sequence_length][target_col]
-        sequences.append(seq)
-        targets.append(target)
-
-    sequences = np.array(sequences)
-    targets = np.array(targets)
-
-    print("Sequences shape:", sequences.shape)  # Debug
-    print("Targets shape:", targets.shape)      # Debug
-
-    return sequences, targets
 
 def preprocess_data_for_arima(df, target_col='Close'):
     """
