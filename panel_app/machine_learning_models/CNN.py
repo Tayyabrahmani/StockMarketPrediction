@@ -112,7 +112,7 @@ class CNNStockModel:
             self.features, self.target
         )
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train
+            self.X_train, self.y_train, test_size=0.1
         )
 
         self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
@@ -274,12 +274,12 @@ class CNNStockModel:
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
-        # best_params = self.run_tuning(n_trials=20, update_optuna_study=True)
-        best_params = {'num_filters': 128, 'dropout_rates': (0.25551670158269935, 0.26769817375735305),
-                       'embed_dim': 128, 'kernel_sizes': (3, 5, 7),
-                       'num_conv_layers': 3, 'batch_size': 32,
-                       'learning_rate': 0.0001449580804866673,
-                       'epochs': 50}
+        best_params = self.run_tuning(n_trials=50, update_optuna_study=True)
+        # best_params = {'num_filters': 128, 'dropout_rates': (0.25551670158269935, 0.26769817375735305),
+        #                'embed_dim': 128, 'kernel_sizes': (3, 5, 7),
+        #                'num_conv_layers': 3, 'batch_size': 32,
+        #                'learning_rate': 0.0001449580804866673,
+        #                'epochs': 50}
         print(f"Best parameters found: {best_params}")
 
         sequence_length = self.X_train.shape[1]

@@ -39,7 +39,7 @@ class SVRStockModel:
             self.features, self.target
         )
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train
+            self.X_train, self.y_train, test_size=0.1
         )
 
         self.X_train, self.X_test, self.y_train, self.y_test, self.X_val, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data_svr(self.X_train, self.X_test, self.y_train, self.y_test, self.X_val, self.y_val)
@@ -173,7 +173,8 @@ class SVRStockModel:
         """
         predictions = self.predict()
         y_test = self.target_scaler.inverse_transform(self.y_test.reshape(-1, 1))
-        metrics = evaluate_predictions(y_test, predictions)
+        # metrics = evaluate_predictions(y_test, predictions)
+        metrics = []
         return metrics
 
     def save_model(self):
@@ -249,7 +250,7 @@ class SVRStockModel:
         # self.select_features(top_k=25, rfe_features=5)
 
         print(f"Optimizing hyperparameters for {self.stock_name}...")
-        best_params = self.optimize_hyperparameters(n_trials=20)
+        best_params = self.optimize_hyperparameters(n_trials=50)
 
         # Set the model with the best hyperparameters
         self.model = SVR(

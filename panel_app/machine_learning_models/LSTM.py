@@ -51,7 +51,7 @@ class LSTMStockModel:
             self.features, self.target
         )
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train
+            self.X_train, self.y_train, test_size=0.1
         )
 
         self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
@@ -108,7 +108,7 @@ class LSTMStockModel:
         )
         return self.model
 
-    def train(self, batch_size, learning_rate, epochs, early_stop_patience):
+    def train(self, batch_size, epochs, early_stop_patience):
         """
         Trains the LSTM model.
         """
@@ -219,8 +219,8 @@ class LSTMStockModel:
         batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
 
         # Build and train the model
-        self.build_model(input_dim=self.X_train.shape[2], hidden_dims=hidden_dims, num_layers=num_layers, dropout=dropout)
-        self.train(batch_size=batch_size, learning_rate=learning_rate, epochs=50, early_stop_patience=10)
+        self.build_model(input_dim=self.X_train.shape[2], learning_rate=learning_rate, hidden_dims=hidden_dims, num_layers=num_layers, dropout=dropout)
+        self.train(batch_size=batch_size, epochs=50, early_stop_patience=10)
 
         # Evaluate on the validation set
         val_predictions = self.model.predict(self.X_val)
@@ -249,7 +249,7 @@ class LSTMStockModel:
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
-        # best_params = self.tune_hyperparameters(n_trials=20)
+        # best_params = self.tune_hyperparameters(n_trials=50)
         best_params = {'num_layers': 1, 'hidden_dim_0': 269, 'dropout': 0.1757380485131196, 'learning_rate': 9.668279090525918e-05, 'batch_size': 16}
 
         print("Building the LSTM model...")
@@ -267,7 +267,6 @@ class LSTMStockModel:
 
         self.train(
             batch_size=best_params["batch_size"],
-            learning_rate=best_params["learning_rate"],
             epochs=epochs,
             early_stop_patience=early_stop_patience,
         )

@@ -63,7 +63,7 @@ class RNNStockModel:
             self.features, self.target
         )
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train
+            self.X_train, self.y_train, test_size=0.1
         )
 
         self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
