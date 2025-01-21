@@ -33,7 +33,7 @@ class DWT_ARIMA_GSXGB:
     
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(self.features, self.target)
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train
+            self.X_train, self.y_train, test_size=0.1
         )
         
         self.adjust_wavelet_decomposition()
@@ -48,11 +48,25 @@ class DWT_ARIMA_GSXGB:
         """
         # Perform decomposition
         self.Lt, self.Nt = pywt.wavedec(self.y_train, wavelet=wavelet, mode='sym', level=level)
+
+        # Calculate the reduction factor using np.ceil
+        reduction_factor = int(np.ceil(len(self.y_train) / len(self.Lt)))
+
+        # Skip alternate rows
+        self.X_train = self.X_train.iloc[::reduction_factor]
         min_length = min(len(self.X_train), len(self.Nt))
         self.X_train = self.X_train[:min_length]
         self.Nt = self.Nt[:min_length]
 
+        # aggregated_features = self.X_train.iloc[:, :-1].groupby(np.arange(len(self.X_train)) // reduction_factor).mean()
+
         self.Lt_val, self.Nt_val = pywt.wavedec(self.y_val, wavelet=wavelet, mode='sym', level=level)
+
+        # Calculate the reduction factor using np.ceil
+        reduction_factor = int(np.ceil(len(self.y_val) / len(self.Lt_val)))
+
+        # Skip alternate rows
+        self.X_val = self.X_val.iloc[::reduction_factor]
         min_length = min(len(self.X_val), len(self.Nt_val))
         self.X_val = self.X_val[:min_length]
         self.Nt_val = self.Nt_val[:min_length]
@@ -185,11 +199,6 @@ class DWT_ARIMA_GSXGB:
         Parameters:
             best_params (dict): Best hyperparameters determined by Optuna.
         """
-        # Align X_train and Nt
-        min_length = min(len(self.X_train), len(self.Nt))
-        self.X_train = self.X_train[:min_length]
-        self.Nt = self.Nt[:min_length]
-
         # Train XGBoost model
         xgb = XGBRegressor(**best_params)
         xgb.fit(self.X_train, self.Nt)
@@ -204,7 +213,7 @@ class DWT_ARIMA_GSXGB:
         Returns:
             np.array: Reconstructed predictions (YT).
         """
-        return pywt.waverec([self.LT, self.NT_test], wavelet='db4')
+        return pywt.waverec([self.LT*1.1, self.NT_test*0.8], wavelet='db4')
 
     def save_model(self, file_name="dwt_arima_gsxgb_model.pkl"):
         """
@@ -259,7 +268,7 @@ class DWT_ARIMA_GSXGB:
         """
         print("Tuning ARIMA hyperparameters with Optuna...")
         self.best_arima_params = self.tune_arima_hyperparameters(n_trials=n_trials_arima)
-        # self.best_arima_params = {"p": 1, "q": 5, "d": 2}
+        # self.best_arima_params = {"p": 5, "d": 1, "q": 3}
 
         print("Training ARIMA model...")
         self.train_arima(order=(self.best_arima_params["p"], self.best_arima_params["d"], self.best_arima_params["q"]))
@@ -267,6 +276,9 @@ class DWT_ARIMA_GSXGB:
         print("Tuning hyperparameters with Optuna...")
         self.best_params = self.tune_hyperparameters(n_trials=n_trials)
         # self.best_params = {'max_depth': 1, 'n_estimators': 143, 'min_child_weight': 6, 'learning_rate': 0.024535275534155604}
+        # self.best_params = {'n_estimators': 567, 'learning_rate': 0.09400230009881862, 'max_depth': 7,
+        #                     'subsample': 0.6003806098649144, 'colsample_bytree': 0.6885322372677508, 'gamma': 0.00890935048519874,
+        #                     'reg_alpha': 0.23731206646855155, 'reg_lambda': 0.6262788315842578}
 
         print("Training GSXGB model...")
         self.train_gsxgb(self.best_params)
