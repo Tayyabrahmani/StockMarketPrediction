@@ -57,7 +57,7 @@ class XGBoostStockModel:
     
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(self.features, self.target)
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train
+            self.X_train, self.y_train, test_size=0.1
         )
 
     def perform_time_series_cv(self):
@@ -237,6 +237,24 @@ class XGBoostStockModel:
         prediction_path = os.path.join(prediction_dir, f"XGBoost_{self.stock_name}_predictions.csv")
         forecast_df.to_csv(prediction_path, index=False)
 
+    def plot_shap_feature_importance(self):
+        """
+        Plots SHAP feature importance for the trained model.
+
+        Raises:
+            ValueError: If the model has not been trained yet.
+        """
+        if not hasattr(self, 'model'):
+            raise ValueError("The model must be trained before plotting SHAP feature importance.")
+        
+        # Explain the model's predictions using SHAP
+        print("Generating SHAP feature importance plot...")
+        explainer = shap.TreeExplainer(self.model)
+        shap_values = explainer.shap_values(self.X_train)
+
+        # Summary plot of SHAP values
+        shap.summary_plot(shap_values, self.X_train, plot_type="bar")
+
     def run(self):
         """
         Runs the full pipeline: trains the model, evaluates it, saves the model and predictions.
@@ -259,4 +277,5 @@ class XGBoostStockModel:
         print(f"Evaluation Metrics for {self.stock_name}: {metrics}")
         self.save_model()
         self.save_predictions()
+        self.plot_shap_feature_importance()
         return metrics
