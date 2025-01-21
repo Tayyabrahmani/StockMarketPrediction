@@ -59,7 +59,7 @@ class TimeSeriesTransformer(Model):
         """
         super(TimeSeriesTransformer, self).__init__()
         self.embedding = Dense(model_dim)
-        self.positional_encoding = self._create_positional_encoding(sequence_length, model_dim) * 0.5
+        self.positional_encoding = self._create_positional_encoding(sequence_length, model_dim) * 0.7
         # self.positional_encoding = tf.Variable(
         #     initial_value=tf.random.uniform([sequence_length, model_dim]),
         #     trainable=True,
@@ -135,18 +135,18 @@ class TransformerStockModel:
         # Concatenate features and targets for sequence creation (train)
         data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
         self.X_train, self.y_train = create_sequences(
-            data_train, sequence_length=self.sequence_length, target_col="Close", is_df=False
+            data_train, sequence_length=self.sequence_length, target_col="Close", is_df=False, is_transformers=True
         )
 
         # Concatenate features and targets for sequence creation (test)
         data_test = np.hstack([self.X_test, self.y_test.reshape(-1, 1)])
         self.X_test, self.y_test = create_sequences(
-            data_test, sequence_length=self.sequence_length, target_col="Close", is_df=False
+            data_test, sequence_length=self.sequence_length, target_col="Close", is_df=False, is_transformers=True
         )
 
         data_val = np.hstack([self.X_val, self.y_val.reshape(-1, 1)])
         self.X_val, self.y_val = create_sequences(
-            data_val, sequence_length=self.sequence_length, target_col="Close", is_df=False
+            data_val, sequence_length=self.sequence_length, target_col="Close", is_df=False, is_transformers=True
         )
 
     def train(self):
@@ -317,7 +317,7 @@ class TransformerStockModel:
         """
         Runs the full pipeline: builds, trains, generates predictions, and saves the model and predictions.
         """
-        # self.best_params = self.tune_hyperparameters(n_trials=20)
+        self.best_params = self.tune_hyperparameters(n_trials=50)
 
         print(f"Training Transformer model for {self.stock_name}...")
         self.train()
