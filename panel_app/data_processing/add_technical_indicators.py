@@ -16,38 +16,38 @@ def add_technical_indicators(df):
         output_csv (str): Path to the output CSV file to save the data with indicators.
     """
     # Add RSI
-    df["RSI"] = RSIIndicator(close=df["Close"], window=14, fillna=True).rsi()
+    df["RSI"] = RSIIndicator(close=df["Close"], window=14).rsi()
 
     # Stochastic RSI
-    df["Stoch"] = StochRSIIndicator(df["Close"], window=14, smooth1=3, smooth2=3, fillna=True).stochrsi()
+    df["Stoch"] = StochRSIIndicator(df["Close"], window=14, smooth1=3, smooth2=3).stochrsi()
     
     # Add Stochastic Oscillator
-    stoch = StochasticOscillator(high=df["High"], low=df["Low"], close=df["Close"], window=14, fillna=True)
+    stoch = StochasticOscillator(high=df["High"], low=df["Low"], close=df["Close"], window=14)
     df["Stochastic"] = stoch.stoch()
 
     # Add MACD
-    macd = MACD(close=df["Close"], window_slow=26, window_fast=12, window_sign=9, fillna=True)
+    macd = MACD(close=df["Close"], window_slow=26, window_fast=12, window_sign=9)
     df["MACD"] = macd.macd()
     df["MACD_Signal"] = macd.macd_signal()
 
     # Add SMA and EMA
-    df["SMA_20"] = SMAIndicator(close=df["Close"], window=20, fillna=True).sma_indicator()
-    df["EMA_20"] = EMAIndicator(close=df["Close"], window=20, fillna=True).ema_indicator()
+    df["SMA_20"] = SMAIndicator(close=df["Close"], window=20).sma_indicator()
+    df["EMA_20"] = EMAIndicator(close=df["Close"], window=20).ema_indicator()
 
     # Add ADX
-    df["ADX"] = ADXIndicator(high=df["High"], low=df["Low"], close=df["Close"], window=14, fillna=True).adx()
+    df["ADX"] = ADXIndicator(high=df["High"], low=df["Low"], close=df["Close"], window=14).adx()
 
     # Add Bollinger Bands
-    bollinger = BollingerBands(close=df["Close"], window=20, window_dev=2, fillna=True)
+    bollinger = BollingerBands(close=df["Close"], window=20, window_dev=2)
     df["Bollinger_High"] = bollinger.bollinger_hband()
     df["Bollinger_Low"] = bollinger.bollinger_lband()
     df["Bollinger_Middle"] = bollinger.bollinger_mavg()
 
     # Add ATR
-    df["ATR"] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14, fillna=True).average_true_range()
+    df["ATR"] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range()
 
     # Add OBV
-    df["OBV"] = OnBalanceVolumeIndicator(close=df["Close"], volume=df["Volume"], fillna=True).on_balance_volume()
+    df["OBV"] = OnBalanceVolumeIndicator(close=df["Close"], volume=df["Volume"]).on_balance_volume()
 
     # Add log of momentum
     # df['log_momentum'] = np.log(df["Close"] - 1)
