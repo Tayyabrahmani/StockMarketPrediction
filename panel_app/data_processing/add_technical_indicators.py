@@ -1,10 +1,10 @@
 import os
 from pathlib import Path
 import pandas as pd
-from ta.momentum import RSIIndicator, StochasticOscillator, StochRSIIndicator
-from ta.trend import SMAIndicator, EMAIndicator, ADXIndicator, MACD
+from ta.momentum import RSIIndicator, StochasticOscillator, StochRSIIndicator, ROCIndicator, WilliamsRIndicator
+from ta.trend import SMAIndicator, EMAIndicator, ADXIndicator, MACD, CCIIndicator
 from ta.volatility import BollingerBands, AverageTrueRange
-from ta.volume import OnBalanceVolumeIndicator
+from ta.volume import OnBalanceVolumeIndicator, VolumeWeightedAveragePrice
 import numpy as np
 
 def add_technical_indicators(df):
@@ -24,15 +24,24 @@ def add_technical_indicators(df):
     # Add Stochastic Oscillator
     stoch = StochasticOscillator(high=df["High"], low=df["Low"], close=df["Close"], window=14)
     df["Stochastic"] = stoch.stoch()
+    df['Stochastic_d'] = stoch.stoch_signal()
 
     # Add MACD
     macd = MACD(close=df["Close"], window_slow=26, window_fast=12, window_sign=9)
     df["MACD"] = macd.macd()
     df["MACD_Signal"] = macd.macd_signal()
+    df['macd_diff'] = macd.macd_diff()
+
+    # Add ROC
+    df['roc'] = ROCIndicator(close=df['Close'], window=12).roc()
 
     # Add SMA and EMA
     df["SMA_20"] = SMAIndicator(close=df["Close"], window=20).sma_indicator()
     df["EMA_20"] = EMAIndicator(close=df["Close"], window=20).ema_indicator()
+
+    # Add SMA and EMA
+    df["SMA_50"] = SMAIndicator(close=df["Close"], window=50).sma_indicator()
+    df["EMA_50"] = EMAIndicator(close=df["Close"], window=50).ema_indicator()
 
     # Add ADX
     df["ADX"] = ADXIndicator(high=df["High"], low=df["Low"], close=df["Close"], window=14).adx()
@@ -42,12 +51,29 @@ def add_technical_indicators(df):
     df["Bollinger_High"] = bollinger.bollinger_hband()
     df["Bollinger_Low"] = bollinger.bollinger_lband()
     df["Bollinger_Middle"] = bollinger.bollinger_mavg()
+    df['Bollinger_Width'] = bollinger.bollinger_wband()
 
     # Add ATR
     df["ATR"] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range()
 
     # Add OBV
     df["OBV"] = OnBalanceVolumeIndicator(close=df["Close"], volume=df["Volume"]).on_balance_volume()
+
+    # Add OBV
+    vwap = VolumeWeightedAveragePrice(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=14)
+    df['VWAP'] = vwap.volume_weighted_average_price()
+
+    # Add support and resistance
+    df['Pivot'] = (df['High'] + df['Low'] + df['Close']) / 3
+    df['Resistance'] = 2 * df['Pivot'] - df['Low']
+    df['Support'] = 2 * df['Pivot'] - df['High']
+    df = df.drop(['Pivot'], axis=1)
+
+    # Add CCI
+    df['CCI'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci()
+
+    # Add williams_r
+    df['williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r()
 
     # Add log of momentum
     # df['log_momentum'] = np.log(df["Close"] - 1)
