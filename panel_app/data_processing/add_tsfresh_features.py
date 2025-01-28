@@ -72,7 +72,7 @@ def add_tsfresh_features(df, n_top_features=16):
     return final_df
 
 
-def process_all_stocks_with_tsfresh(input_dir, output_dir, n_top_features=16):
+def process_all_stocks_with_tsfresh(input_dir, output_dir, n_top_features=10):
     """
     Processes all stock CSV files in the input directory, adds TSFresh features,
     and saves the enhanced datasets to the output directory.
