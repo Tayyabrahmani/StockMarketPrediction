@@ -8,6 +8,7 @@ import os
 import pandas as pd
 import shap
 import argparse
+from pathlib import Path
 
 def plot_shap_feature_importance(model, X_train, feature_names, stock_name):
     """
@@ -133,7 +134,7 @@ def evaluate_models(predictions_dir, actual_data_dir):
         y_pred = merged_df['Predicted Close']
 
         # Compute metrics
-        metrics_dict = evaluate_predictions(y_true, y_pred)      
+        metrics_dict = evaluate_predictions(y_true, y_pred)
         metrics_list.append({
             "Model": model_name,
             "Stock": stock_name,
@@ -171,6 +172,96 @@ def save_metrics_table(metrics_df, stock_metrics, output_dir="Output_Data"):
         stock_metrics_df = pd.DataFrame(metrics).round(3)
         stock_metrics_df.to_csv(stock_metrics_path, index=False)
         print(f"Metrics for stock {stock} saved to {stock_metrics_path}")
+
+def save_metrics_summary(input_dir, output_dir, model_column="Stock Name", stock_column="Model"):
+    """
+    Loads all CSV files from a directory, concatenates them into a single DataFrame,
+    groups the data by metrics, unstacks at the stock level, and saves separate CSVs
+    for each metric.
+
+    Parameters:
+        input_dir (str): Directory containing CSV files.
+        output_dir (str): Directory to save processed metric-level CSVs.
+    """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_dataframes = []
+
+    # Load and concatenate all CSV files
+    for file in input_dir.glob("*_metrics.csv"):
+        try:
+            df = pd.read_csv(file)
+            df['Stock Name'] = file.name.split("_")[0]
+            all_dataframes.append(df)
+        except Exception as e:
+            print(f"❌ Error loading {file.name}: {e}")
+
+    if not all_dataframes:
+        print("❌ No valid CSV files found.")
+        return
+
+    # Concatenate all data into a single DataFrame
+    full_df = pd.concat(all_dataframes, ignore_index=True)
+
+    # Reshape the data: Convert metric names into rows & stock names into columns
+    melted_df = full_df.melt(id_vars=[model_column, stock_column], var_name="Metric", value_name="Value")
+    
+    for metric, metric_df in melted_df.groupby("Metric"):
+        # Pivot: Model -> Index, Stock Name -> Columns
+        pivot_df = metric_df.pivot(index=stock_column, columns=model_column, values="Value")
+    
+        # Save the transposed metric file
+        pivot_df.to_csv(output_dir / f"{metric}_summary.csv")
+
+def save_metric_bar_charts(metrics_df, output_dir="Output_Data"):
+    """
+    Saves RMSE bar charts for each stock at the stock level.
+
+    Parameters:
+        metrics_df (pd.DataFrame): DataFrame containing metrics for all models.
+        output_dir (str): Directory to save the bar charts.
+    """
+    metrics = ["RMSE", "SMAPE", "EVS", "Durbin-Watson", "MDA"]
+
+    for metric in metrics:
+        metric_chart_dir = os.path.join(output_dir, "charts", f"{metric.lower()}_by_stock")
+        os.makedirs(metric_chart_dir, exist_ok=True)
+
+        for stock in metrics_df["Stock"].unique():
+            stock_df = metrics_df[metrics_df["Stock"] == stock]
+            stock_df = stock_df.sort_values(by="Model")
+
+            plt.figure(figsize=(10, 6))
+            plt.bar(stock_df["Model"], stock_df[metric], color="skyblue")
+
+            plt.xlabel("Models")
+            plt.ylabel(metric)
+            plt.title(f"{metric} Comparison for {stock}")
+            plt.xticks(rotation=45, ha="right")
+            plt.tight_layout()
+
+            chart_path = os.path.join(metric_chart_dir, f"{stock}_{metric.lower()}_chart.png")
+            plt.savefig(chart_path, dpi=300)
+            plt.close()
+
+def reorder_metrics_table(metrics_df):
+    """
+    Reorders the metrics table based on the given model order.
+
+    Parameters:
+        metrics_df (pd.DataFrame): DataFrame containing metrics for all models.
+
+    Returns:
+        pd.DataFrame: Reordered DataFrame.
+    """
+    model_order = [
+        "ARIMA", "XGBoost", "ARIMA-XGB", "CNN", "LSTM", 
+        "RNN", "SVR", "Transformers", "Crossformers", "PatchTST"
+    ]
+    metrics_df["Model"] = pd.Categorical(metrics_df["Model"], categories=model_order, ordered=True)
+    return metrics_df.sort_values(by=["Stock", "Model"])
 
 def predict_and_inverse_transform(model, X, scaler, feature_dim):
     """
@@ -220,8 +311,17 @@ if __name__ == "__main__":
     # Evaluate models and generate metrics table
     metrics_df, stock_metrics = evaluate_models(predictions_dir, actual_data_dir)
 
+    # Reorder metrics table
+    metrics_df = reorder_metrics_table(metrics_df)
+
     # Save metrics table
     save_metrics_table(metrics_df, stock_metrics)
+
+    # Save Metrics level summary for all the metrics
+    save_metrics_summary(input_dir="Output_Data/saved_metrics", output_dir="Output_Data/saved_metrics")
+
+    # Save RMSE bar chart
+    save_metric_bar_charts(metrics_df)
 
     print("\nEvaluation Metrics for All Models:")
 
