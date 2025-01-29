@@ -15,65 +15,69 @@ def add_technical_indicators(df):
         input_csv (str): Path to the input CSV file containing stock data.
         output_csv (str): Path to the output CSV file to save the data with indicators.
     """
+    df = df.ffill()
+
     # Add RSI
-    df["RSI"] = RSIIndicator(close=df["Close"], window=14).rsi()
+    df["RSI"] = RSIIndicator(close=df["Close"], window=14).rsi().shift(1)
 
     # Stochastic RSI
-    df["Stoch"] = StochRSIIndicator(df["Close"], window=14, smooth1=3, smooth2=3).stochrsi()
+    df["Stoch"] = StochRSIIndicator(df["Close"], window=14, smooth1=3, smooth2=3).stochrsi().shift(1)
     
     # Add Stochastic Oscillator
     stoch = StochasticOscillator(high=df["High"], low=df["Low"], close=df["Close"], window=14)
-    df["Stochastic"] = stoch.stoch()
-    df['Stochastic_d'] = stoch.stoch_signal()
+    df["Stochastic"] = stoch.stoch().shift(1)
+    df['Stochastic_d'] = stoch.stoch_signal().shift(1)
 
     # Add MACD
     macd = MACD(close=df["Close"], window_slow=26, window_fast=12, window_sign=9)
-    df["MACD"] = macd.macd()
-    df["MACD_Signal"] = macd.macd_signal()
-    df['macd_diff'] = macd.macd_diff()
+    df["MACD"] = macd.macd().shift(1)
+    df["MACD_Signal"] = macd.macd_signal().shift(1)
+    df['macd_diff'] = macd.macd_diff().shift(1)
 
     # Add ROC
-    df['roc'] = ROCIndicator(close=df['Close'], window=12).roc()
+    df['roc'] = ROCIndicator(close=df['Close'], window=12).roc().shift(1)
 
     # Add SMA and EMA
-    df["SMA_20"] = SMAIndicator(close=df["Close"], window=20).sma_indicator()
-    df["EMA_20"] = EMAIndicator(close=df["Close"], window=20).ema_indicator()
+    df["SMA_20"] = SMAIndicator(close=df["Close"], window=20).sma_indicator().shift(1)
+    df["EMA_20"] = EMAIndicator(close=df["Close"], window=20).ema_indicator().shift(1)
 
     # Add SMA and EMA
-    df["SMA_50"] = SMAIndicator(close=df["Close"], window=50).sma_indicator()
-    df["EMA_50"] = EMAIndicator(close=df["Close"], window=50).ema_indicator()
+    df["SMA_50"] = SMAIndicator(close=df["Close"], window=50).sma_indicator().shift(1)
+    df["EMA_50"] = EMAIndicator(close=df["Close"], window=50).ema_indicator().shift(1)
 
     # Add ADX
-    df["ADX"] = ADXIndicator(high=df["High"], low=df["Low"], close=df["Close"], window=14).adx()
+    df["ADX"] = ADXIndicator(high=df["High"], low=df["Low"], close=df["Close"], window=14).adx().shift(1)
 
     # Add Bollinger Bands
     bollinger = BollingerBands(close=df["Close"], window=20, window_dev=2)
-    df["Bollinger_High"] = bollinger.bollinger_hband()
-    df["Bollinger_Low"] = bollinger.bollinger_lband()
-    df["Bollinger_Middle"] = bollinger.bollinger_mavg()
-    df['Bollinger_Width'] = bollinger.bollinger_wband()
+    df["Bollinger_High"] = bollinger.bollinger_hband().shift(1)
+    df["Bollinger_Low"] = bollinger.bollinger_lband().shift(1)
+    df["Bollinger_Middle"] = bollinger.bollinger_mavg().shift(1)
+    df['Bollinger_Width'] = bollinger.bollinger_wband().shift(1)
 
     # Add ATR
-    df["ATR"] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range()
+    df["ATR"] = AverageTrueRange(high=df["High"], low=df["Low"], close=df["Close"], window=14).average_true_range().shift(1)
 
     # Add OBV
-    df["OBV"] = OnBalanceVolumeIndicator(close=df["Close"], volume=df["Volume"]).on_balance_volume()
+    df["OBV"] = OnBalanceVolumeIndicator(close=df["Close"], volume=df["Volume"]).on_balance_volume().shift(1)
 
     # Add OBV
     vwap = VolumeWeightedAveragePrice(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=14)
-    df['VWAP'] = vwap.volume_weighted_average_price()
+    df['VWAP'] = vwap.volume_weighted_average_price().shift(1)
 
-    # Add support and resistance
-    df['Pivot'] = (df['High'] + df['Low'] + df['Close']) / 3
-    df['Resistance'] = 2 * df['Pivot'] - df['Low']
-    df['Support'] = 2 * df['Pivot'] - df['High']
+    # Calculate Pivot, Resistance, and Support using the previous 7 days' data
+    df['Pivot'] = df[['High', 'Low', 'Close']].rolling(window=7).mean().mean(axis=1)
+    df['Resistance'] = 2 * df['Pivot'] - df['Low'].rolling(window=7).mean().shift(1)
+    df['Support'] = 2 * df['Pivot'] - df['High'].rolling(window=7).mean().shift(1)
+
+    # Drop the 'Pivot' column as it's no longer needed
     df = df.drop(['Pivot'], axis=1)
 
     # Add CCI
-    df['CCI'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci()
+    df['CCI'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci().shift(1)
 
     # Add williams_r
-    df['williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r()
+    df['Williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r().shift(1)
 
     # Add log of momentum
     # df['log_momentum'] = np.log(df["Close"] - 1)
