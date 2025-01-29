@@ -23,7 +23,7 @@ def load_data(file_path):
             raise ValueError(f"'Close' column is missing in the input data: {file_path}")
         
         # Remove columns which have similar value as the target variable
-        data = data.drop(['Open', 'Low', 'High', 'Volume', 'Flow', 'Turnover - USD', 'Stock Name'], axis=1)
+        data = data.drop(['Open', 'Low', 'High', 'Volume', 'Flow', 'Turnover - USD', 'Stock Name'], errors='ignore', axis=1)
         return data
     except Exception as e:
         raise ValueError(f"Error loading data from {file_path}: {e}")
@@ -242,14 +242,16 @@ def preprocess_data_for_arima(df, target_col='Close'):
     exogenous_scaled_df  = pd.DataFrame(exogenous_scaled, columns=exog_cols)
     return exogenous_scaled_df, target_series, scaler
 
-def train_test_split_time_series(X, y, test_size=0.02):
+def train_test_split_time_series(X, y, test_size=90):
     """
     Splits the data into training and testing sets.
 
     Parameters:
         X (np.array): Features.
         y (np.array): Target variable.
-        test_size (float): Fraction of the data to use for testing.
+        test_size (float or int): 
+            - If `float`, represents the fraction of data used for testing.
+            - If `int`, represents the exact number of test samples.
     
     Returns:
         tuple: X_train, X_test, y_train, y_test
@@ -259,7 +261,18 @@ def train_test_split_time_series(X, y, test_size=0.02):
     if len(X) == 0:
         raise ValueError("Input data (X) is empty.")
     
-    split_idx = int(len(X) * (1 - test_size))
-    if split_idx == 0 or split_idx == len(X):
-        raise ValueError("Test size too small or too large for the data.")
+    # Handle both fraction-based and fixed-size test set
+    if isinstance(test_size, float):  
+        if not (0 < test_size < 1):
+            raise ValueError("If test_size is a float, it must be between 0 and 1.")
+        split_idx = int(len(X) * (1 - test_size))
+    
+    elif isinstance(test_size, int):  
+        if not (0 < test_size < len(X)):
+            raise ValueError("If test_size is an integer, it must be between 1 and len(X)-1.")
+        split_idx = len(X) - test_size  # Ensure exact test sample count
+    
+    else:
+        raise ValueError("test_size must be either a float (0-1) or an integer (1 to len(X)-1).")
+    
     return X[:split_idx], X[split_idx:], y[:split_idx], y[split_idx:]
