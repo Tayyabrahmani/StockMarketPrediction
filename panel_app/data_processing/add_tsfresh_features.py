@@ -6,8 +6,26 @@ from tsfresh import extract_features
 from tsfresh.feature_extraction.settings import EfficientFCParameters
 from tsfresh.feature_selection.significance_tests import target_real_feature_real_test
 
+custom_fc_parameters = {
+    "linear_trend": [{"attr": "pvalue"}],
+    "mean_abs_change": None,
+    "absolute_sum_of_changes": None,
+    "standard_deviation": None,
+    "variance": None,
+    "variation_coefficient": None,
+    "fft_coefficient": [
+        {"coeff": 1, "attr": "abs"}, {"coeff": 2, "attr": "abs"},
+        {"coeff": 4, "attr": "abs"}, {"coeff": 1, "attr": "angle"}
+        ],
+    "spkt_welch_density": [{"coeff": 2}, {"coeff": 5}],
+    "binned_entropy": [{"max_bins": 10}, {"max_bins": 15}, {"max_bins": 20}],
+    "number_peaks": [{"n": 5}, {"n": 10}],
+    "skewness": None,
+    "kurtosis": None,
+    "agg_autocorrelation": [{"f_agg": "mean", "maxlag": 5}, {"f_agg": "var", "maxlag": 10}]
+}
 
-def add_tsfresh_features(df, n_top_features=16):
+def add_tsfresh_features(df, n_top_features=10):
     """
     Adds TSFresh features to the stock data.
 
@@ -34,8 +52,9 @@ def add_tsfresh_features(df, n_top_features=16):
         column_id="id",
         column_sort="Exchange Date",
         column_value="Close",
-        default_fc_parameters=EfficientFCParameters(),
-        n_jobs=14  # Adjust based on available resources
+        # default_fc_parameters=EfficientFCParameters(),
+        default_fc_parameters=custom_fc_parameters,
+        n_jobs=15  # Adjust based on available resources
     )
 
     # Handle NaN values
@@ -52,6 +71,11 @@ def add_tsfresh_features(df, n_top_features=16):
     p_values_series = pd.Series(p_values)
     top_features = p_values_series.nsmallest(n_top_features).index
     selected_features = extracted_features[top_features]
+
+    # p_values = extracted_features.apply(lambda feature: target_real_feature_real_test(feature, df["Close"])[1])
+    # # Select the top N features
+    # top_features = p_values.nsmallest(n_top_features).index
+    # selected_features = extracted_features[top_features]
 
     # Reset the index and prepare for merging
     selected_features = selected_features.reset_index()
@@ -88,8 +112,8 @@ def process_all_stocks_with_tsfresh(input_dir, output_dir, n_top_features=10):
 
     # Process each CSV file in the input directory
     for stock_file in input_path.glob("*.csv"):
-        if 'Alphabet Inc' not  in stock_file.name:
-            pass
+        # if 'Alphabet Inc' not in stock_file.name:
+        #     pass
         try:
             print(f"Processing file: {stock_file.name}")
 
