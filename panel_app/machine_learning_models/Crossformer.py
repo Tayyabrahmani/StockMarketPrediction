@@ -35,26 +35,34 @@ class TimeSeriesDataset(Dataset):
         y = self.data[idx + self.sequence_length, -1]  # Single-step target
         return x, y
 
+class DirectionalLoss(nn.Module):
+    def forward(self, y_pred, y_true):
+        direction_true = torch.sign(y_true[1:] - y_true[:-1])
+        direction_pred = torch.sign(y_pred[1:] - y_pred[:-1])
+        directional_error = (direction_true != direction_pred).float()
+        return directional_error.mean()
+
 class CrossformerStockModel:
     def __init__(self, file_path, stock_name, hyperparameters=None):
         self.file_path = file_path
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
-            "d_model": 32,
-            "d_ff": 256,
+            "d_model": 128,
+            "d_ff": 192,
             "n_heads": 4,
-            "e_layers": 1,
-            "dropout": 0.1,
-            "learning_rate": 0.001,
+            "e_layers": 3,
+            "dropout": 0.125,
+            # "learning_rate": 0.003902310852880716,
+            "learning_rate": 0.00079,
             "batch_size": 32,
-            "train_epochs": 50,
-            "patience": 5,
+            "train_epochs": 100,
+            "patience": 10,
             "seg_len": 6,
-            "win_size": 3,
+            "win_size": 2,
             "factor": 10,
         }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.sequence_length = 30
+        self.sequence_length = 60
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
@@ -68,8 +76,13 @@ class CrossformerStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
+
+        # Add the last 29 rows (sequence length) from the train data to create sequences
+        self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
+        self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train
+            self.X_train, self.y_train, test_size=0.2
         )
 
         (
@@ -85,9 +98,6 @@ class CrossformerStockModel:
             self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False
         )
 
-        # Add the last 29 rows (sequence length) from the train data to create sequences
-        self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
-        self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
 
         # Flatten target arrays to ensure they are 1D
         self.y_train = self.y_train.ravel()
@@ -141,7 +151,8 @@ class CrossformerStockModel:
 
     def train(self):
         model_optim = optim.AdamW(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
-        criterion = nn.MSELoss()
+        criterion_mse = nn.MSELoss()
+        criterion_directional = DirectionalLoss()
         early_stopping = EarlyStopping(patience=self.hyperparameters["patience"], verbose=True)
 
         checkpoint_dir = os.path.join("checkpoints", self.stock_name)
@@ -161,11 +172,14 @@ class CrossformerStockModel:
                 model_optim.zero_grad()
 
                 # Mixed precision
-                with autocast(device_type="cuda"):  # Automatically uses float16 precision for computations
+                with autocast():  # Automatically uses float16 precision for computations
                     pred = self.model(batch_x)
                     pred = pred[:, :, 0].squeeze(-1)
 
-                    loss = criterion(pred, batch_y)
+                    loss_mse = criterion_mse(pred, batch_y)
+                    loss_directional = criterion_directional(pred, batch_y)
+
+                    loss = loss_mse + 0.05 * loss_directional
                 
                 # Scales the loss and calls backward
                 scaler.scale(loss).backward()
@@ -175,7 +189,7 @@ class CrossformerStockModel:
                 train_losses.append(loss.item())
 
             train_loss_mean = sum(train_losses) / len(train_losses)
-            val_loss = self._validate(self.val_loader, criterion)
+            val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_mse, criterion_directional)
 
             print(
                 f"[Epoch {epoch + 1}/{self.hyperparameters['train_epochs']}] "
@@ -191,7 +205,7 @@ class CrossformerStockModel:
             # Adjust learning rate
             adjust_learning_rate(model_optim, epoch + 1, self.hyperparameters["learning_rate"], lradj='type1')
 
-    def _validate(self, val_loader, criterion):
+    def _validate_with_multiple_criteria(self, val_loader, criterion_mse, criterion_directional):
         self.model.eval()
         val_losses = []
 
@@ -204,8 +218,12 @@ class CrossformerStockModel:
 
                 pred = pred[:, :, 0].squeeze(-1)
 
-                loss = criterion(pred, batch_y)
-                val_losses.append(loss.item())
+                # Compute individual losses
+                loss_mse = criterion_mse(pred, batch_y)
+                loss_directional = criterion_directional(pred, batch_y)
+                total_loss = loss_mse + 0.1 * loss_directional
+
+                val_losses.append(total_loss.item())
 
         return sum(val_losses) / len(val_losses)
 
@@ -234,10 +252,10 @@ class CrossformerStockModel:
             d_ff = trial.suggest_int("d_ff", 128, 512, step=64)
             n_heads = trial.suggest_categorical("n_heads", [2, 4, 8])
             e_layers = trial.suggest_int("e_layers", 1, 4)
-            dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.1)
+            dropout = trial.suggest_float("dropout", 0.1, 0.5, log=True)
             learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
             batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
-            seg_len = trial.suggest_int("seg_len", 6, 12, step=2)
+            seg_len = trial.suggest_int("seg_len", 4, 12, step=2)
 
             # Temporarily update self.hyperparameters for the trial
             self.hyperparameters = {
@@ -269,7 +287,8 @@ class CrossformerStockModel:
                 shuffle=False,
                 pin_memory=True,
             )
-            criterion = nn.MSELoss()
+            criterion_mse = nn.MSELoss()
+            criterion_directional = DirectionalLoss()
             model_optim = optim.AdamW(self.model.parameters(), lr=learning_rate)
             scaler = GradScaler()
 
@@ -280,16 +299,19 @@ class CrossformerStockModel:
                     batch_y = batch_y.float().to(self.device)
 
                     model_optim.zero_grad()
-                    with autocast(device_type="cuda"):
+                    with autocast():
                         pred = self.model(batch_x)
                         pred = pred[:, :, 0].squeeze(-1)
-                        loss = criterion(pred, batch_y)
+                        loss_mse = criterion_mse(pred, batch_y)
+                        loss_directional = criterion_directional(pred, batch_y)
+
+                        loss = loss_mse + 0.1 * loss_directional
 
                     scaler.scale(loss).backward()
                     scaler.step(model_optim)
                     scaler.update()
 
-                val_loss = self._validate(val_loader, criterion)
+                val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_mse, criterion_directional)
                 if epoch >= self.hyperparameters["patience"]:
                     break
 
@@ -338,22 +360,35 @@ class CrossformerStockModel:
         """
         prediction_dir = "Output_Data/saved_predictions"
         os.makedirs(prediction_dir, exist_ok=True)
-        prediction_path = os.path.join(prediction_dir, f"Crossformer_{self.stock_name}_predictions.csv")
+        prediction_path = os.path.join(prediction_dir, f"Crossformers_{self.stock_name}_predictions.csv")
 
         prediction_dates = self.data.index[-len(predictions):]
         prediction_df = pd.DataFrame({"Date": prediction_dates, "Predicted Close": predictions.flatten()})
         prediction_df.to_csv(prediction_path, index=False)
         print(f"Predictions saved to {prediction_path}")
 
+    def save_hyperparameters(self):
+        """
+        Saves the hyperparameters as a CSV file.
+        """
+        hyperparam_dir = os.path.join("Output_Data", "Hyperparameters", "Crossformer")
+        os.makedirs(hyperparam_dir, exist_ok=True)
+        hyperparam_path = os.path.join(hyperparam_dir, f"{self.stock_name}_hyperparameter.csv")
+
+        hyperparam_df = pd.DataFrame.from_dict(self.hyperparameters, orient="index", columns=["Value"])
+        hyperparam_df.to_csv(hyperparam_path)
+        print(f"Hyperparameters saved to {hyperparam_path}")
+
     def run(self):
         """
         Runs the training, testing, and saves the results.
         """
         print(f"Optimizing Hyperparameters")
-        # self.optimize_hyperparameters(n_trials=20)
+        self.optimize_hyperparameters(n_trials=50)
         print(f"Training Crossformer model for {self.stock_name}...")
         self.train()
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
+        self.save_hyperparameters()
         return predictions
