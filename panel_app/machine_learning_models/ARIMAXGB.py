@@ -33,7 +33,7 @@ class DWT_ARIMA_GSXGB:
     
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(self.features, self.target)
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.1
+            self.X_train, self.y_train, test_size=0.2
         )
         
         self.adjust_wavelet_decomposition()
@@ -86,7 +86,7 @@ class DWT_ARIMA_GSXGB:
         def objective_arima(trial):
             # Suggest hyperparameters for ARIMA
             p = trial.suggest_int("p", 0, 5)
-            d = trial.suggest_int("d", 0, 2)
+            d = trial.suggest_int("d", 1, 2)
             q = trial.suggest_int("q", 0, 5)
 
             try:
@@ -213,7 +213,7 @@ class DWT_ARIMA_GSXGB:
         Returns:
             np.array: Reconstructed predictions (YT).
         """
-        return pywt.waverec([self.LT*1.1, self.NT_test*0.8], wavelet='db4')
+        return pywt.waverec([self.LT*2, self.NT_test], wavelet='db4')
 
     def save_model(self, file_name="dwt_arima_gsxgb_model.pkl"):
         """
@@ -267,8 +267,8 @@ class DWT_ARIMA_GSXGB:
             np.array: Reconstructed predictions (YT).
         """
         print("Tuning ARIMA hyperparameters with Optuna...")
-        self.best_arima_params = self.tune_arima_hyperparameters(n_trials=n_trials_arima)
-        # self.best_arima_params = {"p": 5, "d": 1, "q": 3}
+        # self.best_arima_params = self.tune_arima_hyperparameters(n_trials=n_trials_arima)
+        self.best_arima_params = {"p": 1, "d": 2, "q": 4}
 
         print("Training ARIMA model...")
         self.train_arima(order=(self.best_arima_params["p"], self.best_arima_params["d"], self.best_arima_params["q"]))
