@@ -24,10 +24,13 @@ class SegMerging(nn.Module):
         x: B, ts_d, L, d_model
         """
         batch_size, ts_d, seg_num, d_model = x.shape
-        pad_num = seg_num % self.win_size
-        if pad_num != 0: 
-            pad_num = self.win_size - pad_num
-            x = torch.cat((x, x[:, :, -pad_num:, :]), dim = -2)
+        pad_num = (self.win_size - (seg_num % self.win_size)) % self.win_size
+
+        # print(f"[DEBUG] Before merging: seg_num={seg_num}, pad_num={pad_num}")
+
+        if pad_num != 0:
+            pad_tensor = torch.zeros(batch_size, ts_d, pad_num, d_model, device=x.device)
+            x = torch.cat((x, pad_tensor), dim=-2)
 
         seg_to_merge = []
         for i in range(self.win_size):
