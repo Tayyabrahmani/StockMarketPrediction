@@ -49,7 +49,8 @@ class PatchTSTStockModel:
                                         fcst_history=self.hyperparameters["context_length"],
                                         fcst_horizon=self.hyperparameters["forecast_horizon"],
                                         valid_size=0.1,
-                                        test_size=82,
+                                        test_size=90,
+                                        show_plot=False,
                                         )
 
         self.splits = splits

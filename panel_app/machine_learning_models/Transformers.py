@@ -104,7 +104,7 @@ class TransformerStockModel:
             "dropout": 0.2,
             "learning_rate": 0.0001,
             "epochs": 150, 
-            "batch_size": 32, 
+            "batch_size": 16, 
         }
         self.model = None
         self.sequence_length = 30
@@ -122,15 +122,18 @@ class TransformerStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.1
-        )
-
-        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Add the last 29 rows (sequence length) from the train data to create sequences
         self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
         self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
+        # Split train test split
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train, test_size=0.2
+        )
+
+        # Scale data
+        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Concatenate features and targets for sequence creation (train)
         data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
@@ -313,15 +316,29 @@ class TransformerStockModel:
 
         prediction_df.to_csv(prediction_path, index=False)
 
+    def save_hyperparameters(self):
+        """
+        Saves the hyperparameters as a CSV file.
+        """
+        hyperparam_dir = os.path.join("Output_Data", "Hyperparameters", "Transformers")
+        os.makedirs(hyperparam_dir, exist_ok=True)
+        hyperparam_path = os.path.join(hyperparam_dir, f"{self.stock_name}_hyperparameter.csv")
+
+        hyperparam_df = pd.DataFrame.from_dict(self.hyperparameters, orient="index", columns=["Value"])
+        hyperparam_df.to_csv(hyperparam_path)
+        print(f"Hyperparameters saved to {hyperparam_path}")
+
     def run(self):
         """
         Runs the full pipeline: builds, trains, generates predictions, and saves the model and predictions.
         """
         self.best_params = self.tune_hyperparameters(n_trials=50)
+        self.hyperparameters = self.best_params
 
         print(f"Training Transformer model for {self.stock_name}...")
         self.train()
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
+        self.save_hyperparameters()
         return predictions

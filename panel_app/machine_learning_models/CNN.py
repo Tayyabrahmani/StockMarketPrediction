@@ -111,15 +111,16 @@ class CNNStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.1
-        )
-
-        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Add the last 29 rows (sequence length) from the train data to create sequences
         self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
         self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train, test_size=0.2
+        )
+
+        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Concatenate features and targets for sequence creation (train)
         data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
@@ -174,7 +175,11 @@ class CNNStockModel:
         elif optimizer_type == "rmsprop":
             optimizer = optimizers.RMSprop(learning_rate=learning_rate)
 
-        model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
+        # model.compile(optimizer=optimizer, loss="mse", metrics=["mae"])
+        model.compile(optimizer="adam",
+                      loss=tf.keras.losses.Huber(delta=1.0),
+                      metrics=["mae"]
+                     )
 
         # Training
         early_stopping = callbacks.EarlyStopping(monitor="val_loss", patience=5, restore_best_weights=True)
@@ -270,17 +275,30 @@ class CNNStockModel:
         })
         prediction_df.to_csv(prediction_path, index=False)
 
+    def save_hyperparameters(self):
+        """
+        Saves the hyperparameters as a CSV file.
+        """
+        hyperparam_dir = os.path.join("Output_Data", "Hyperparameters", "CNN")
+        os.makedirs(hyperparam_dir, exist_ok=True)
+        hyperparam_path = os.path.join(hyperparam_dir, f"{self.stock_name}_hyperparameter.csv")
+
+        hyperparam_df = pd.DataFrame.from_dict(self.hyperparameters, orient="index", columns=["Value"])
+        hyperparam_df.to_csv(hyperparam_path)
+        print(f"Hyperparameters saved to {hyperparam_path}")
+
     def run(self):
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
-        best_params = self.run_tuning(n_trials=50, update_optuna_study=True)
-        # best_params = {'num_filters': 128, 'dropout_rates': (0.25551670158269935, 0.26769817375735305),
-        #                'embed_dim': 128, 'kernel_sizes': (3, 5, 7),
-        #                'num_conv_layers': 3, 'batch_size': 32,
-        #                'learning_rate': 0.0001449580804866673,
-        #                'epochs': 50}
+        # best_params = self.run_tuning(n_trials=50, update_optuna_study=True)
+        best_params = {'num_filters': 32, 'dropout_rates': (0.085551670158269935, 0.16769817375735305),
+                       'embed_dim': 128, 'kernel_sizes': (3, 5, 7),
+                       'num_conv_layers': 3, 'batch_size': 32,
+                       'learning_rate': 0.0001449580804866673,
+                       'epochs': 50}
         print(f"Best parameters found: {best_params}")
+        self.hyperparameters = best_params
 
         sequence_length = self.X_train.shape[1]
         input_dim = self.X_train.shape[2]
@@ -306,4 +324,5 @@ class CNNStockModel:
         print("Saving the model...")
         self.save_model()
         
+        # self.save_hyperparameters()
         return predictions

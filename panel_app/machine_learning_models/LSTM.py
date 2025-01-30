@@ -18,9 +18,13 @@ from machine_learning_models.evaluation import (
 from skimage.restoration import denoise_wavelet
 import optuna
 from tensorflow.keras.models import Model, Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Bidirectional
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, Bidirectional, MultiHeadAttention, LayerNormalization
 from tensorflow.keras.callbacks import EarlyStopping, LearningRateScheduler, ReduceLROnPlateau
 import tensorflow as tf
+
+def quantile_loss(q, y_true, y_pred):
+    e = y_true - y_pred
+    return tf.reduce_mean(tf.maximum(q * e, (q - 1) * e))
 
 class LSTMStockModel:
     def __init__(self, file_path, stock_name):
@@ -50,15 +54,16 @@ class LSTMStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.1
-        )
-
-        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Add the last 29 rows (sequence length) from the train data to create sequences
         self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
         self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train, test_size=0.2
+        )
+
+        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Concatenate features and targets for sequence creation (train)
         data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
@@ -97,13 +102,16 @@ class LSTMStockModel:
             self.model.add(lstm_layer)
             self.model.add(Dropout(dropout))
 
-        # Output layer
-        self.model.add(Dense(1))
+        # Fully Connected Dense Layers
+        self.model.add(Dense(64, activation="relu"))
+        self.model.add(Dense(32, activation="relu"))
+        self.model.add(Dense(1, activation="linear"))
 
         # Compile the model with gradient clipping
         self.model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate, clipnorm=1.0),
-            loss="mse",
+            # loss=tf.keras.losses.Huber(delta=5),
+            loss=lambda y_true, y_pred: quantile_loss(0.9, y_true, y_pred),
             metrics=["mae"],
         )
         return self.model
@@ -245,12 +253,30 @@ class LSTMStockModel:
 
         return study.best_params
 
+    def save_hyperparameters(self):
+        """
+        Saves the hyperparameters as a CSV file.
+        """
+        hyperparam_dir = os.path.join("Output_Data", "Hyperparameters", "LSTM")
+        os.makedirs(hyperparam_dir, exist_ok=True)
+        hyperparam_path = os.path.join(hyperparam_dir, f"{self.stock_name}_hyperparameter.csv")
+
+        hyperparam_df = pd.DataFrame.from_dict(self.hyperparameters, orient="index", columns=["Value"])
+        hyperparam_df.to_csv(hyperparam_path)
+        print(f"Hyperparameters saved to {hyperparam_path}")
+
     def run(self, epochs=150, early_stop_patience=10):
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
         # best_params = self.tune_hyperparameters(n_trials=50)
-        best_params = {'num_layers': 1, 'hidden_dim_0': 269, 'dropout': 0.1757380485131196, 'learning_rate': 9.668279090525918e-05, 'batch_size': 16}
+        best_params = {'num_layers': 1, 'hidden_dim_0': 512,
+                       'dropout': 0.1757380485131196, 'learning_rate': 0.0009282222705170997, 'batch_size': 16}
+
+        # best_params = {'num_layers': 1, 'hidden_dim_0': 215,
+        #                'dropout': 0.2757380485131196, 'learning_rate': 0.00282222705170997, 'batch_size': 16}
+
+        self.hyperparameters = best_params
 
         print("Building the LSTM model...")
         # self.build_model(input_dim=self.X_train.shape[2], hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
@@ -276,4 +302,6 @@ class LSTMStockModel:
 
         print("Saving predictions...")
         self.save_predictions(predictions)
+
+        # self.save_hyperparameters()
         return predictions

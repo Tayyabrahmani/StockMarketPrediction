@@ -40,8 +40,8 @@ class XGBoostStockModel:
             "subsample": 0.5,
             "colsample_bytree": 0.82,
             "gamma": 0.08,
-            "reg_alpha": 0.12,
-            "reg_lambda": 0.003,
+            "reg_alpha": 0.5,
+            "reg_lambda": 1,
             "random_state": 42,
         }
 
@@ -57,7 +57,7 @@ class XGBoostStockModel:
     
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(self.features, self.target)
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.1
+            self.X_train, self.y_train, test_size=0.2
         )
 
     def perform_time_series_cv(self):
@@ -255,6 +255,18 @@ class XGBoostStockModel:
         # Summary plot of SHAP values
         shap.summary_plot(shap_values, self.X_train, plot_type="bar")
 
+    def save_hyperparameters(self):
+        """
+        Saves the hyperparameters as a CSV file.
+        """
+        hyperparam_dir = os.path.join("Output_Data", "Hyperparameters", "XGBoost")
+        os.makedirs(hyperparam_dir, exist_ok=True)
+        hyperparam_path = os.path.join(hyperparam_dir, f"{self.stock_name}_hyperparameter.csv")
+
+        hyperparam_df = pd.DataFrame.from_dict(self.hyperparameters, orient="index", columns=["Value"])
+        hyperparam_df.to_csv(hyperparam_path)
+        print(f"Hyperparameters saved to {hyperparam_path}")
+
     def run(self):
         """
         Runs the full pipeline: trains the model, evaluates it, saves the model and predictions.
@@ -277,5 +289,6 @@ class XGBoostStockModel:
         print(f"Evaluation Metrics for {self.stock_name}: {metrics}")
         self.save_model()
         self.save_predictions()
-        self.plot_shap_feature_importance()
+        # self.plot_shap_feature_importance()
+        self.save_hyperparameters()
         return metrics

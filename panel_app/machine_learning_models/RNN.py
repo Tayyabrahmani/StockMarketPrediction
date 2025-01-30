@@ -62,15 +62,16 @@ class RNNStockModel:
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split_time_series(
             self.features, self.target
         )
-        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.1
-        )
-
-        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Add the last 29 rows (sequence length) from the train data to create sequences
         self.X_test = np.vstack([self.X_train[-self.sequence_length:], self.X_test])
         self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
+
+        self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
+            self.X_train, self.y_train, test_size=0.2
+        )
+
+        self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
 
         # Concatenate features and targets for sequence creation (train)
         data_train = np.hstack([self.X_train, self.y_train.reshape(-1, 1)])
@@ -174,11 +175,23 @@ class RNNStockModel:
         print("Best validation loss:", study.best_value)
         return study.best_params
 
+    def save_hyperparameters(self):
+        """
+        Saves the hyperparameters as a CSV file.
+        """
+        hyperparam_dir = os.path.join("Output_Data", "Hyperparameters", "RNN")
+        os.makedirs(hyperparam_dir, exist_ok=True)
+        hyperparam_path = os.path.join(hyperparam_dir, f"{self.stock_name}_hyperparameter.csv")
+
+        hyperparam_df = pd.DataFrame.from_dict(self.hyperparameters, orient="index", columns=["Value"])
+        hyperparam_df.to_csv(hyperparam_path)
+        print(f"Hyperparameters saved to {hyperparam_path}")
+
     def run(self, epochs=30, early_stop_patience=10):
         print(f"Training RNN model for {self.stock_name}...")
-        # best_params = self.tune_hyperparameters(n_trials=15)
-        best_params = {'num_layers': 1, 'hidden_dim': 300, 'dropout': 0.1, 'learning_rate': 0.00031703223453147364, 'batch_size': 16}
-
+        best_params = self.tune_hyperparameters(n_trials=50)
+        # best_params = {'num_layers': 2, 'hidden_dim': 250, 'dropout': 0.1, 'learning_rate': 0.0033321896009443535, 'batch_size': 32}
+        self.hyperparameters = best_params
         input_dim = self.X_train.shape[2]
         self.build_model(
             input_dim=input_dim,
@@ -192,4 +205,5 @@ class RNNStockModel:
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
+        self.save_hyperparameters()
         return predictions

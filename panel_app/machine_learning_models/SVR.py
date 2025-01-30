@@ -39,7 +39,7 @@ class SVRStockModel:
             self.features, self.target
         )
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.1
+            self.X_train, self.y_train, test_size=0.2
         )
 
         self.X_train, self.X_test, self.y_train, self.y_test, self.X_val, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data_svr(self.X_train, self.X_test, self.y_train, self.y_test, self.X_val, self.y_val)
@@ -272,11 +272,11 @@ class SVRStockModel:
         self.save_model()
         self.save_predictions(predictions)
 
-        plot_shap_feature_importance(
-            model=self.model, 
-            X_train=self.X_train.reshape(self.X_train.shape[0], -1),
-            feature_names=self.features.columns,
-            stock_name=self.stock_name
-        )
+        # plot_shap_feature_importance(
+        #     model=self.model, 
+        #     X_train=self.X_train.reshape(self.X_train.shape[0], -1),
+        #     feature_names=self.features.columns,
+        #     stock_name=self.stock_name
+        # )
 
         return metrics
