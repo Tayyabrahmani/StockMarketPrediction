@@ -22,6 +22,16 @@ from machine_learning_models.preprocessing import (
 )
 from torch.cuda.amp import autocast, GradScaler
 
+class QuantileLoss(nn.Module):
+    def __init__(self, quantile=0.9):
+        super(QuantileLoss, self).__init__()
+        self.quantile = quantile
+
+    def forward(self, y_pred, y_true):
+        errors = y_true - y_pred
+        loss = torch.max(self.quantile * errors, (self.quantile - 1) * errors)
+        return loss.mean()
+
 class TimeSeriesDataset(Dataset):
     def __init__(self, data, sequence_length):
         self.data = data
@@ -35,34 +45,35 @@ class TimeSeriesDataset(Dataset):
         y = self.data[idx + self.sequence_length, -1]  # Single-step target
         return x, y
 
-class DirectionalLoss(nn.Module):
-    def forward(self, y_pred, y_true):
-        direction_true = torch.sign(y_true[1:] - y_true[:-1])
-        direction_pred = torch.sign(y_pred[1:] - y_pred[:-1])
-        directional_error = (direction_true != direction_pred).float()
-        return directional_error.mean()
+# class DirectionalLoss(nn.Module):
+#     def forward(self, y_pred, y_true):
+#         direction_true = torch.sign(y_true[1:] - y_true[:-1])
+#         direction_pred = torch.sign(y_pred[1:] - y_pred[:-1])
+#         directional_error = (direction_true != direction_pred).float()
+#         return directional_error.mean()
 
 class CrossformerStockModel:
     def __init__(self, file_path, stock_name, hyperparameters=None):
         self.file_path = file_path
         self.stock_name = stock_name
         self.hyperparameters = hyperparameters or {
-            "d_model": 128,
-            "d_ff": 192,
+            "d_model": 256,
+            "d_ff": 512,
             "n_heads": 4,
             "e_layers": 3,
-            "dropout": 0.125,
+            "dropout": 0.2,
             # "learning_rate": 0.003902310852880716,
-            "learning_rate": 0.00079,
+            # "learning_rate": 0.00019216000054779,
+            "learning_rate": 0.003,
             "batch_size": 32,
             "train_epochs": 100,
-            "patience": 10,
+            "patience": 5,
             "seg_len": 6,
             "win_size": 2,
             "factor": 10,
         }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.sequence_length = 60
+        self.sequence_length = 30
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
@@ -82,7 +93,7 @@ class CrossformerStockModel:
         self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
 
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.2
+            self.X_train, self.y_train, test_size=0.1
         )
 
         (
@@ -97,7 +108,6 @@ class CrossformerStockModel:
         ) = preprocess_data(
             self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False
         )
-
 
         # Flatten target arrays to ensure they are 1D
         self.y_train = self.y_train.ravel()
@@ -150,9 +160,13 @@ class CrossformerStockModel:
             self.model = nn.DataParallel(self.model)
 
     def train(self):
-        model_optim = optim.AdamW(self.model.parameters(), lr=self.hyperparameters["learning_rate"])
-        criterion_mse = nn.MSELoss()
-        criterion_directional = DirectionalLoss()
+        model_optim = optim.AdamW(self.model.parameters(), lr=self.hyperparameters["learning_rate"], weight_decay=1e-4)
+        scheduler = optim.lr_scheduler.OneCycleLR(model_optim, max_lr=0.0005, steps_per_epoch=len(self.train_loader), epochs=self.hyperparameters["train_epochs"])
+        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(model_optim, mode='min', factor=0.5, patience=3, verbose=True)
+
+        criterion_quantile = nn.MSELoss()
+        # criterion_quantile = QuantileLoss(quantile=0.9)
+        # criterion_directional = DirectionalLoss()
         early_stopping = EarlyStopping(patience=self.hyperparameters["patience"], verbose=True)
 
         checkpoint_dir = os.path.join("checkpoints", self.stock_name)
@@ -166,21 +180,10 @@ class CrossformerStockModel:
             train_losses = []
             
             for batch_x, batch_y in self.train_loader:
-                batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
-
                 model_optim.zero_grad()
+                pred, true = self._process_one_batch(batch_x, batch_y)
+                loss = criterion_quantile(pred, true)
 
-                # Mixed precision
-                with autocast():  # Automatically uses float16 precision for computations
-                    pred = self.model(batch_x)
-                    pred = pred[:, :, 0].squeeze(-1)
-
-                    loss_mse = criterion_mse(pred, batch_y)
-                    loss_directional = criterion_directional(pred, batch_y)
-
-                    loss = loss_mse + 0.05 * loss_directional
-                
                 # Scales the loss and calls backward
                 scaler.scale(loss).backward()
                 scaler.step(model_optim)
@@ -189,12 +192,15 @@ class CrossformerStockModel:
                 train_losses.append(loss.item())
 
             train_loss_mean = sum(train_losses) / len(train_losses)
-            val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_mse, criterion_directional)
+            # val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_quantile, criterion_directional)
+            val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_quantile)
 
             print(
                 f"[Epoch {epoch + 1}/{self.hyperparameters['train_epochs']}] "
                 f"Train Loss: {train_loss_mean:.4f} | Val Loss: {val_loss:.4f}"
             )
+
+            scheduler.step()
 
             # Early stopping
             early_stopping(val_loss, self.model, os.path.join(checkpoint_dir, "checkpoint.pth"))
@@ -202,38 +208,50 @@ class CrossformerStockModel:
                 print("[Training] Early stopping triggered.")
                 break
 
-            # Adjust learning rate
-            adjust_learning_rate(model_optim, epoch + 1, self.hyperparameters["learning_rate"], lradj='type1')
+            # # Adjust learning rate
+            # adjust_learning_rate(model_optim, epoch + 1, self.hyperparameters["learning_rate"], lradj='type1')
 
-    def _validate_with_multiple_criteria(self, val_loader, criterion_mse, criterion_directional):
+    # def _validate_with_multiple_criteria(self, val_loader, criterion_quantile, criterion_directional):
+    def _validate_with_multiple_criteria(self, val_loader, criterion_quantile):
         self.model.eval()
         val_losses = []
 
         with torch.no_grad():
             for batch_x, batch_y in val_loader:
-                batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
-
-                pred = self.model(batch_x)
-
-                pred = pred[:, :, 0].squeeze(-1)
+                pred, true = self._process_one_batch(batch_x, batch_y)  # Use function
 
                 # Compute individual losses
-                loss_mse = criterion_mse(pred, batch_y)
-                loss_directional = criterion_directional(pred, batch_y)
-                total_loss = loss_mse + 0.1 * loss_directional
+                loss_quantile = criterion_quantile(pred, true)
+
+                # loss_directional = criterion_directional(pred, batch_y)
+                # total_loss = loss_quantile + 0.1 * loss_directional
+                total_loss = loss_quantile
 
                 val_losses.append(total_loss.item())
 
         return sum(val_losses) / len(val_losses)
 
-    def _process_one_batch(self, batch_x, batch_y):
+    def _process_one_batch(self, batch_x, batch_y, inverse=False):
         """
-        Processes a single batch of data.
+        Processes a single batch: moves tensors to GPU, passes input through model, extracts last timestep,
+        and applies inverse transformation (if needed).
         """
         batch_x = batch_x.float().to(self.device)
         batch_y = batch_y.float().to(self.device)
-        outputs = self.model(batch_x)
+
+        # TODO: Remove after testing
+        # batch_x += torch.randn_like(batch_x) * 0.01
+        
+        outputs = self.model(batch_x)  # Get model predictions (batch_size, seq_len, output_dim)
+        # Extract last time step prediction
+        outputs = outputs[:, -1, 0]  # Take the last timestep from the first output dimension
+        # batch_y = batch_y[:, -1]  # Take the corresponding target value
+
+        # Apply inverse transformation if needed
+        if inverse:
+            outputs = self.target_scaler.inverse_transform(outputs.cpu().detach().numpy()).flatten()
+            batch_y = self.target_scaler.inverse_transform(batch_y.cpu().detach().numpy()).flatten()
+
         return outputs, batch_y
 
     def optimize_hyperparameters(self, n_trials=50):
@@ -248,12 +266,12 @@ class CrossformerStockModel:
         """
         def objective(trial):
             # Define the search space
-            d_model = trial.suggest_categorical("d_model", [32, 64, 128])
+            d_model = trial.suggest_categorical("d_model", [32, 64, 128, 256])
             d_ff = trial.suggest_int("d_ff", 128, 512, step=64)
             n_heads = trial.suggest_categorical("n_heads", [2, 4, 8])
             e_layers = trial.suggest_int("e_layers", 1, 4)
-            dropout = trial.suggest_float("dropout", 0.1, 0.5, log=True)
-            learning_rate = trial.suggest_float("learning_rate", 1e-4, 1e-2, log=True)
+            dropout = trial.suggest_float("dropout", 0.1, 0.5)
+            learning_rate = trial.suggest_float("learning_rate", 1e-4, 5e-3, log=True)
             batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
             seg_len = trial.suggest_int("seg_len", 4, 12, step=2)
 
@@ -276,19 +294,13 @@ class CrossformerStockModel:
             # Build and validate the model
             self._build_model()
             train_loader = DataLoader(
-                self.train_dataset,
-                batch_size=batch_size,
-                shuffle=True,
-                pin_memory=True,
+                self.train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True
             )
             val_loader = DataLoader(
-                self.val_dataset,
-                batch_size=batch_size,
-                shuffle=False,
-                pin_memory=True,
+                self.val_dataset, batch_size=batch_size, shuffle=False, pin_memory=True,
             )
             criterion_mse = nn.MSELoss()
-            criterion_directional = DirectionalLoss()
+            # criterion_directional = DirectionalLoss()
             model_optim = optim.AdamW(self.model.parameters(), lr=learning_rate)
             scaler = GradScaler()
 
@@ -300,18 +312,19 @@ class CrossformerStockModel:
 
                     model_optim.zero_grad()
                     with autocast():
-                        pred = self.model(batch_x)
-                        pred = pred[:, :, 0].squeeze(-1)
-                        loss_mse = criterion_mse(pred, batch_y)
-                        loss_directional = criterion_directional(pred, batch_y)
+                        pred, true = self._process_one_batch(batch_x, batch_y)
+                        loss_mse = criterion_mse(pred, true)
+                        # loss_directional = criterion_directional(pred, batch_y)
 
-                        loss = loss_mse + 0.1 * loss_directional
+                        # loss = loss_mse + 0.1 * loss_directional
+                        loss = loss_mse
 
                     scaler.scale(loss).backward()
                     scaler.step(model_optim)
                     scaler.update()
 
-                val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_mse, criterion_directional)
+                # val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_mse, criterion_directional)
+                val_loss = self._validate_with_multiple_criteria(self.val_loader, criterion_mse)
                 if epoch >= self.hyperparameters["patience"]:
                     break
 
@@ -330,16 +343,17 @@ class CrossformerStockModel:
         predictions = []
 
         with torch.no_grad():
-            for batch_x, _ in self.test_loader:
-                batch_x = batch_x.float().to(self.device)
-
-                pred = self.model(batch_x)
-
-                pred = pred[:, :, 0].squeeze(-1)
-
+            for batch_x, batch_y in self.test_loader:
+                pred, true = self._process_one_batch(batch_x, batch_y)            
                 predictions.append(pred.cpu().numpy())
 
-        predictions = self.target_scaler.inverse_transform(np.concatenate(predictions, axis=0).reshape(-1,1)).flatten()
+        raw_predictions = np.concatenate(predictions, axis=0)
+        predictions = self.target_scaler.inverse_transform(raw_predictions.reshape(-1,1)).flatten()
+
+        # # 🔥 Apply correction factor
+        # correction_factor = np.mean(self.y_train) / np.mean(predictions)
+        # predictions = predictions * correction_factor  
+
         return predictions
 
     def save_model(self):
@@ -383,12 +397,12 @@ class CrossformerStockModel:
         """
         Runs the training, testing, and saves the results.
         """
-        print(f"Optimizing Hyperparameters")
-        self.optimize_hyperparameters(n_trials=50)
+        # print(f"Optimizing Hyperparameters")
+        # self.optimize_hyperparameters(n_trials=30)
         print(f"Training Crossformer model for {self.stock_name}...")
         self.train()
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
-        self.save_hyperparameters()
+        # self.save_hyperparameters()
         return predictions
