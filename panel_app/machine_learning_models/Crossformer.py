@@ -59,21 +59,21 @@ class CrossformerStockModel:
         self.hyperparameters = hyperparameters or {
             "d_model": 256,
             "d_ff": 512,
-            "n_heads": 4,
-            "e_layers": 3,
-            "dropout": 0.2,
+            "n_heads": 8,
+            "e_layers": 2,
+            "dropout": 0.1,
             # "learning_rate": 0.003902310852880716,
             # "learning_rate": 0.00019216000054779,
             "learning_rate": 0.003,
             "batch_size": 32,
             "train_epochs": 100,
             "patience": 5,
-            "seg_len": 6,
+            "seg_len": 8,
             "win_size": 2,
             "factor": 10,
         }
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.sequence_length = 30
+        self.sequence_length = 20
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
