@@ -10,6 +10,25 @@ import shap
 import argparse
 from pathlib import Path
 
+COUNTRY_STOCK_MAP = {
+    "USA": ["NASDAQ 100 Index", "Alphabet Inc", "Berkshire Hathaway Inc", "Pfizer Inc"],
+    "Germany": ["Deutsche Boerse DAX Index", "SAP SE", "Siemens AG", "Volkswagen AG"],
+    "India": ["Nifty 50 Index", "Infosys Ltd", "Reliance Industries Ltd", "Tata Motors Ltd"]
+}
+
+ASSET_STOCK_MAP = {
+    "Equities": ["Alphabet Inc", 'Berkshire Hathaway Inc',  'Deutsche Boerse DAX Index',
+                 'Infosys Ltd', 'NASDAQ 100 Index', 'Nifty 50 Index', 'Pfizer Inc', 'Reliance Industries Ltd',
+                 'SAP SE', 'Siemens AG', 'Tata Motors Ltd', 'Volkswagen AG'],
+    "Commodities": ['CBoT Wheat Composite Commodity Future Continuation 1',  'Gold', 'ICE Europe Brent Crude Electronic Energy Future'],
+    "Forex": ['Euro-Indian Rupee FX Cross Rate']
+}
+
+model_order = [
+    "ARIMA", "XGBoost", "ARIMA-XGB", "CNN", "LSTM", 
+    "RNN", "Transformers", "Crossformers", "PatchTST"
+]
+
 def plot_shap_feature_importance(model, X_train, feature_names, stock_name):
     """
     Plots and saves the SHAP feature importance based on SHAP values.
@@ -170,6 +189,7 @@ def save_metrics_table(metrics_df, stock_metrics, output_dir="Output_Data"):
     for stock, metrics in stock_metrics.items():
         stock_metrics_path = os.path.join(overall_metrics_dir, f"{stock}_metrics.csv")
         stock_metrics_df = pd.DataFrame(metrics).round(3)
+        stock_metrics_df = stock_metrics_df.set_index("Model").reindex(model_order).reset_index()
         stock_metrics_df.to_csv(stock_metrics_path, index=False)
         print(f"Metrics for stock {stock} saved to {stock_metrics_path}")
 
@@ -211,9 +231,189 @@ def save_metrics_summary(input_dir, output_dir, model_column="Stock Name", stock
     for metric, metric_df in melted_df.groupby("Metric"):
         # Pivot: Model -> Index, Stock Name -> Columns
         pivot_df = metric_df.pivot(index=stock_column, columns=model_column, values="Value")
-    
+        pivot_df = pivot_df.reindex(index=model_order)
+
         # Save the transposed metric file
         pivot_df.to_csv(output_dir / f"{metric}_summary.csv")
+
+def save_country_metrics_summary(input_dir, output_dir, model_column="Stock Name", stock_column="Model", summary_type="Country"):
+    """
+    Loads all CSV files from a directory, concatenates them into a single DataFrame,
+    groups the data by country based on the provided mapping, and saves separate CSVs
+    for each country.
+
+    Parameters:
+        input_dir (str): Directory containing CSV files.
+        output_dir (str): Directory to save processed metric-level CSVs.
+    """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_dataframes = []
+
+    # Load and concatenate all CSV files
+    for file in input_dir.glob("*_metrics.csv"):
+        try:
+            df = pd.read_csv(file)
+            df['Stock Name'] = file.name.split("_")[0]
+            all_dataframes.append(df)
+        except Exception as e:
+            print(f"❌ Error loading {file.name}: {e}")
+
+    if not all_dataframes:
+        print("❌ No valid CSV files found.")
+        return
+
+    # Concatenate all data into a single DataFrame
+    full_df = pd.concat(all_dataframes, ignore_index=True)
+
+    # Reshape the data: Convert metric names into rows & stock names into columns
+    melted_df = full_df.melt(id_vars=[model_column, stock_column], var_name="Metric", value_name="Value")
+
+    dict_type = {"Country": COUNTRY_STOCK_MAP, "Asset": ASSET_STOCK_MAP}
+    dict_type = dict_type[summary_type]
+
+    for country, stocks in dict_type.items():
+        country_df = melted_df[melted_df[model_column].isin(stocks)]
+        
+        if country_df.empty:
+            print(f"⚠️ No data found for {country}, skipping...")
+            continue
+
+        for metric, metric_df in country_df.groupby("Metric"):
+            # Pivot: Model -> Index, Stock Name -> Columns
+            pivot_df = metric_df.pivot(index=stock_column, columns=model_column, values="Value")
+            pivot_df = pivot_df.reindex(index=model_order)
+
+            # Save country-specific metric file
+            country_output_dir = output_dir / country
+            country_output_dir.mkdir(parents=True, exist_ok=True)
+            pivot_df.to_csv(country_output_dir / f"{metric}_summary.csv")
+
+            print(f"✅ Saved {metric}_summary.csv for {country}")
+
+def process_and_plot_metrics(input_dir, output_dir):
+    """
+    Loads metric summary files, adds an average column across models, 
+    creates bar charts for each metric, and saves results.
+
+    Parameters:
+        input_dir (str): Directory containing metric CSV files.
+        output_dir (str): Directory to save processed CSVs and charts.
+    """
+    input_dir = Path(input_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    all_files = list(input_dir.glob("*.csv"))
+
+    if not all_files:
+        print("❌ No metric summary files found.")
+        return
+
+    for file in all_files:
+        try:
+            # Load CSV
+            df = pd.read_csv(file)
+            df = df.set_index("Model").reindex(model_order).reset_index()
+
+            # Calculate average across models (ignoring first column which is 'Model')
+            df["Average"] = df.iloc[:, 1:].mean(axis=1)
+            df = df[["Model", "Average"]]
+
+            # Generate bar chart
+            plt.figure(figsize=(12, 6))
+            df.set_index("Model").plot(kind="bar", figsize=(12, 6))
+            plt.title(f"{file.stem.split('_')[0]} - Model Comparison")
+            plt.ylabel("Metric Value")
+            plt.xticks(rotation=45)
+            plt.legend(title="Models", bbox_to_anchor=(1.05, 1), loc='upper left')
+
+            # Save chart
+            plt.tight_layout()
+            plt.savefig(output_dir / f"{file.stem.split('_')[0]}_chart.png")
+            plt.close()
+
+            print(f"✅ Processed & saved: {file.name}")
+
+        except Exception as e:
+            print(f"❌ Error processing {file.name}: {e}")
+
+def process_and_plot_metrics_region(input_dir: str, output_dir: str, regions=["USA", "Germany", "India"]):
+    """
+    Reads RMSE values from RMSE_Summary.csv files in each region folder,
+    calculates average RMSE per forecasting model, and generates a grouped bar chart.
+
+    Args:
+        input_dir (str): Path to the folder containing regional RMSE_Summary.csv files.
+        output_dir (str): Path to save the generated bar chart.
+    """
+    rmse_data = {}
+
+    # Ensure output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Read SMAPE values from SMAPE_Summary.csv files
+    for region in regions:
+        file_path = os.path.join(input_dir, region, "SMAPE_Summary.csv")
+
+        if not os.path.exists(file_path):
+            print(f"Warning: {file_path} does not exist. Skipping {region}.")
+            continue
+
+        try:
+            # Read CSV file (first column is Model names, rest are SMAPE values for different stocks)
+            df = pd.read_csv(file_path)
+
+            # Ensure first column is "Model" and extract model names
+            df.rename(columns={df.columns[0]: "Model"}, inplace=True)
+
+            # Compute the average SMAPE across all stock columns (excluding "Model" column)
+            df["Average_SMAPE"] = df.iloc[:, 1:].mean(axis=1)
+
+            # Store SMAPE data in a dictionary
+            for _, row in df.iterrows():
+                model = row["Model"]
+                rmse_value = row["Average_SMAPE"]
+                if model not in rmse_data:
+                    rmse_data[model] = {}
+                rmse_data[model][region] = rmse_value
+
+        except Exception as e:
+            print(f"Error processing {file_path}: {e}")
+
+    # Convert to DataFrame
+    df_final = pd.DataFrame.from_dict(rmse_data, orient="index").fillna(0)
+
+    # Plot grouped bar chart
+    models = df_final.index
+    x = np.arange(len(models))
+    width = 0.25  # Bar width
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Define colors for each region
+    colors = {regions[0]: "blue", regions[1]: "red", regions[2]: "green"}
+
+    # Plot bars for each region
+    for i, region in enumerate(regions):
+        ax.bar(x + i * width, df_final[region], width, label=region, color=colors.get(region, "gray"))
+
+    # Formatting
+    ax.set_xlabel("Forecasting Models")
+    ax.set_ylabel("Average SMAPE")
+    ax.set_title("SMAPE Comparison Across Forecasting Models")
+    ax.set_xticks(x + width)
+    ax.set_xticklabels(models, rotation=45, ha="right")
+    ax.legend()
+
+    # Save the figure
+    output_path = os.path.join(output_dir, "SMAPE_chart.png")
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close()
+    print(f"Chart saved at: {output_path}")
 
 def save_metric_bar_charts(metrics_df, output_dir="Output_Data"):
     """
@@ -256,10 +456,6 @@ def reorder_metrics_table(metrics_df):
     Returns:
         pd.DataFrame: Reordered DataFrame.
     """
-    model_order = [
-        "ARIMA", "XGBoost", "ARIMA-XGB", "CNN", "LSTM", 
-        "RNN", "SVR", "Transformers", "Crossformers", "PatchTST"
-    ]
     metrics_df["Model"] = pd.Categorical(metrics_df["Model"], categories=model_order, ordered=True)
     return metrics_df.sort_values(by=["Stock", "Model"])
 
@@ -318,10 +514,25 @@ if __name__ == "__main__":
     save_metrics_table(metrics_df, stock_metrics)
 
     # Save Metrics level summary for all the metrics
-    save_metrics_summary(input_dir="Output_Data/saved_metrics", output_dir="Output_Data/saved_metrics")
+    save_metrics_summary(input_dir="Output_Data/saved_metrics", output_dir="Output_Data/saved_metrics/overall_summary")
+
+    # Save Metrics level summary country level
+    save_country_metrics_summary(input_dir="Output_Data/saved_metrics", output_dir="Output_Data/saved_metrics/region_summary", summary_type="Country")
+
+    # Save Metrics level summary asset level
+    save_country_metrics_summary(input_dir="Output_Data/saved_metrics", output_dir="Output_Data/saved_metrics/asset_summary", summary_type="Asset")
 
     # Save RMSE bar chart
-    save_metric_bar_charts(metrics_df)
+    save_metric_bar_charts(metrics_df, output_dir="Output_Data/saved_metrics")
+
+    # Save bar chart for overall summary
+    process_and_plot_metrics(input_dir="Output_Data/saved_metrics/overall_summary", output_dir="Output_Data/charts/overall_summary")
+
+    # Save bar chart for region summary
+    process_and_plot_metrics_region(input_dir="Output_Data/saved_metrics/region_summary", output_dir="Output_Data/charts/region_summary")
+
+    # Save bar chart for Asset summary
+    process_and_plot_metrics_region(input_dir="Output_Data/saved_metrics/asset_summary", output_dir="Output_Data/charts/asset_summary", regions=["Equities", "Commodities", "Forex"])
 
     print("\nEvaluation Metrics for All Models:")
 
