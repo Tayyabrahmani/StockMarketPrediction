@@ -93,7 +93,7 @@ def fill_na_values(df):
     Returns:
         pd.DataFrame: DataFrame with NaN values filled using forward fill.
     """
-    return df.ffill().bfill()
+    return df.ffill().bfill().fillna(0)
 
 def preprocess_data_svr(X_train, X_test, y_train, y_test, X_val, y_val):
     """
