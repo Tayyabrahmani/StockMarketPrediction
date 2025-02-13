@@ -60,20 +60,20 @@ class CrossformerStockModel:
             "d_model": 256,
             "d_ff": 512,
             "n_heads": 8,
-            "e_layers": 2,
-            "dropout": 0.1,
+            "e_layers": 4,
+            "dropout": 0.2,
             # "learning_rate": 0.003902310852880716,
             # "learning_rate": 0.00019216000054779,
-            "learning_rate": 0.003,
+            "learning_rate": 0.001,
             "batch_size": 32,
             "train_epochs": 100,
-            "patience": 5,
+            "patience": 7,
             "seg_len": 8,
             "win_size": 2,
             "factor": 10,
         }
+        self.sequence_length = 30
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.sequence_length = 20
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
@@ -160,12 +160,21 @@ class CrossformerStockModel:
             self.model = nn.DataParallel(self.model)
 
     def train(self):
-        model_optim = optim.AdamW(self.model.parameters(), lr=self.hyperparameters["learning_rate"], weight_decay=1e-4)
-        scheduler = optim.lr_scheduler.OneCycleLR(model_optim, max_lr=0.0005, steps_per_epoch=len(self.train_loader), epochs=self.hyperparameters["train_epochs"])
-        # scheduler = optim.lr_scheduler.ReduceLROnPlateau(model_optim, mode='min', factor=0.5, patience=3, verbose=True)
+        model_optim = optim.AdamW(self.model.parameters(), lr=self.hyperparameters["learning_rate"], weight_decay=5e-5)
+        # scheduler = optim.lr_scheduler.OneCycleLR(
+        #     model_optim, 
+        #     max_lr=0.0005, 
+        #     steps_per_epoch=len(self.train_loader), 
+        #     epochs=self.hyperparameters["train_epochs"],
+        #     div_factor=10  # Initial LR is max_lr / 10
+        # )
+        scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+            model_optim, mode="min", factor=0.75, patience=3, min_lr=5e-6, verbose=True
+        )
+        # scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(model_optim, T_0=10, T_mult=2, eta_min=1e-6)
 
-        criterion_quantile = nn.MSELoss()
-        # criterion_quantile = QuantileLoss(quantile=0.9)
+        # criterion_quantile = nn.MSELoss()
+        criterion_quantile = QuantileLoss(quantile=0.9)
         # criterion_directional = DirectionalLoss()
         early_stopping = EarlyStopping(patience=self.hyperparameters["patience"], verbose=True)
 
@@ -200,7 +209,8 @@ class CrossformerStockModel:
                 f"Train Loss: {train_loss_mean:.4f} | Val Loss: {val_loss:.4f}"
             )
 
-            scheduler.step()
+            # scheduler.step()
+            scheduler.step(val_loss)
 
             # Early stopping
             early_stopping(val_loss, self.model, os.path.join(checkpoint_dir, "checkpoint.pth"))

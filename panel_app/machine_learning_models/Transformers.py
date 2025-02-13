@@ -19,6 +19,18 @@ from machine_learning_models.preprocessing import (
 )
 import optuna
 from machine_learning_models.evaluation import predict_and_inverse_transform
+import tensorflow.keras.backend as K
+
+def quantile_loss(q):
+    """
+    Returns a custom Keras loss function for quantile regression.
+    q: Quantile value (0 < q < 1), e.g., 0.1, 0.5, 0.9.
+    """
+    def loss(y_true, y_pred):
+        error = y_true - y_pred
+        return K.mean(K.maximum(q * error, (q - 1) * error))
+    
+    return loss
 
 class TransformerEncoderLayer(tf.keras.layers.Layer):
     def __init__(self, model_dim, num_heads, ff_dim, dropout):
@@ -60,6 +72,7 @@ class TimeSeriesTransformer(Model):
         super(TimeSeriesTransformer, self).__init__()
         self.embedding = Dense(model_dim)
         self.positional_encoding = self._create_positional_encoding(sequence_length, model_dim) * 0.7
+        # self.positional_encoding = self._create_positional_encoding(sequence_length, model_dim)
         # self.positional_encoding = tf.Variable(
         #     initial_value=tf.random.uniform([sequence_length, model_dim]),
         #     trainable=True,
@@ -96,18 +109,18 @@ class TransformerStockModel:
         self.hyperparameters = hyperparameters or {
             "dec_seq_len": 30,
             "max_seq_len": 500,
-            "d_model": 64,
-            "n_encoder_layers": 2,
-            "n_decoder_layers": 2,
+            "d_model": 128,
+            "n_encoder_layers": 3,
+            "n_decoder_layers": 3,
             "n_heads": 8,
             "dim_feedforward": 256,
             "dropout": 0.2,
             "learning_rate": 0.0001,
-            "epochs": 150, 
-            "batch_size": 16, 
+            "epochs": 150,
+            "batch_size": 32,
         }
-        self.model = None
         self.sequence_length = 30
+        self.model = None
 
         # Load and preprocess data
         self.data = load_data(self.file_path)
@@ -166,7 +179,9 @@ class TransformerStockModel:
             dropout=self.hyperparameters["dropout"],
         )
         self.model.compile(optimizer=Adam(learning_rate=self.hyperparameters["learning_rate"]),
-                        loss="mse", metrics=["mae"])
+                           loss=quantile_loss(0.8),
+                        #    loss="mse",
+                           metrics=["mae"])
 
         # Early stopping callback
         early_stopping = tf.keras.callbacks.EarlyStopping(
@@ -203,6 +218,7 @@ class TransformerStockModel:
         d_model = trial.suggest_int("d_model", 32, 128, step=32)
         num_heads = trial.suggest_int("n_heads", 2, 8, step=2)
         dim_feedforward = trial.suggest_int("dim_feedforward", 64, 512, step=64)
+        n_encoder_layers = trial.suggest_int("n_encoder_layers", 2, 8, step=2)
         dropout = trial.suggest_float("dropout", 0.1, 0.5, step=0.1)
         learning_rate = trial.suggest_float("learning_rate", 1e-5, 1e-2, log=True)
         batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
@@ -217,6 +233,7 @@ class TransformerStockModel:
             "learning_rate": learning_rate,
             "epochs": epochs,
             "batch_size": batch_size,
+            "n_encoder_layers": n_encoder_layers,
         })
 
         # Initialize and compile the model
@@ -226,7 +243,7 @@ class TransformerStockModel:
             model_dim=d_model,
             num_heads=num_heads,
             ff_dim=dim_feedforward,
-            num_layers=self.hyperparameters["n_encoder_layers"],
+            num_layers=n_encoder_layers,
             dropout=dropout,
         )
         self.model.compile(
@@ -332,13 +349,13 @@ class TransformerStockModel:
         """
         Runs the full pipeline: builds, trains, generates predictions, and saves the model and predictions.
         """
-        self.best_params = self.tune_hyperparameters(n_trials=50)
-        self.hyperparameters = self.best_params
+        # self.best_params = self.tune_hyperparameters(n_trials=1)
+        # self.hyperparameters = self.best_params
 
         print(f"Training Transformer model for {self.stock_name}...")
         self.train()
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
-        self.save_hyperparameters()
+        # self.save_hyperparameters()
         return predictions

@@ -38,7 +38,7 @@ class DWT_ARIMA_GSXGB:
         
         self.adjust_wavelet_decomposition()
 
-        self.LT = None
+        self.LT_test = None
         self.NT_test = None
         self.best_params = None
 
@@ -86,7 +86,7 @@ class DWT_ARIMA_GSXGB:
         def objective_arima(trial):
             # Suggest hyperparameters for ARIMA
             p = trial.suggest_int("p", 0, 5)
-            d = trial.suggest_int("d", 1, 2)
+            d = trial.suggest_int("d", 0, 2)
             q = trial.suggest_int("q", 0, 5)
 
             try:
@@ -122,7 +122,7 @@ class DWT_ARIMA_GSXGB:
         """
         model = ARIMA(self.Lt, order=order)
         fitted_model = model.fit()
-        self.LT = fitted_model.forecast(steps=len(self.X_test))
+        self.LT_test = fitted_model.forecast(steps=len(self.X_test))
 
     def tune_hyperparameters(self, n_trials=50):
         """
@@ -213,7 +213,12 @@ class DWT_ARIMA_GSXGB:
         Returns:
             np.array: Reconstructed predictions (YT).
         """
-        return pywt.waverec([self.LT*2, self.NT_test], wavelet='db4')
+        reconstructed_signal = pywt.waverec([self.LT_test*1.1, self.NT_test], wavelet='db4')
+        reconstructed_signal = np.mean(reconstructed_signal.reshape(-1, 2), axis=1)
+        # reconstructed_signal = reconstructed_signal[::2]
+        # reconstructed_signal = reconstructed_signal[-len(self.X_test):]
+
+        return reconstructed_signal
 
     def save_model(self, file_name="dwt_arima_gsxgb_model.pkl"):
         """
@@ -227,7 +232,7 @@ class DWT_ARIMA_GSXGB:
         file_path = os.path.join(model_dir, file_name)
 
         model_data = {
-            "LT": self.LT,
+            "LT_test": self.LT_test,
             "NT_test": self.NT_test,
             "best_params": self.best_params,
             "data": self.data,
@@ -268,17 +273,15 @@ class DWT_ARIMA_GSXGB:
         """
         print("Tuning ARIMA hyperparameters with Optuna...")
         # self.best_arima_params = self.tune_arima_hyperparameters(n_trials=n_trials_arima)
-        self.best_arima_params = {"p": 1, "d": 2, "q": 4}
+        self.best_arima_params = {"p": 5, "d": 2, "q": 0}
 
         print("Training ARIMA model...")
         self.train_arima(order=(self.best_arima_params["p"], self.best_arima_params["d"], self.best_arima_params["q"]))
 
         print("Tuning hyperparameters with Optuna...")
-        self.best_params = self.tune_hyperparameters(n_trials=n_trials)
+        # self.best_params = self.tune_hyperparameters(n_trials=n_trials)
         # self.best_params = {'max_depth': 1, 'n_estimators': 143, 'min_child_weight': 6, 'learning_rate': 0.024535275534155604}
-        # self.best_params = {'n_estimators': 567, 'learning_rate': 0.09400230009881862, 'max_depth': 7,
-        #                     'subsample': 0.6003806098649144, 'colsample_bytree': 0.6885322372677508, 'gamma': 0.00890935048519874,
-        #                     'reg_alpha': 0.23731206646855155, 'reg_lambda': 0.6262788315842578}
+        self.best_params = {'n_estimators': 454, 'learning_rate': 0.012497258228922073, 'max_depth': 9, 'subsample': 0.7557740391912783, 'colsample_bytree': 0.9597662170853086, 'gamma': 0.0014187499312547374, 'reg_alpha': 2.888737056047899, 'reg_lambda': 0.03144870724536429}
 
         print("Training GSXGB model...")
         self.train_gsxgb(self.best_params)

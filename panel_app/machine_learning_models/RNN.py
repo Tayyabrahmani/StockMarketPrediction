@@ -16,6 +16,9 @@ from machine_learning_models.evaluation import predict_and_inverse_transform
 import numpy as np
 import optuna
 from optuna.integration import TFKerasPruningCallback
+def quantile_loss(q, y_true, y_pred):
+    e = y_true - y_pred
+    return tf.reduce_mean(tf.maximum(q * e, (q - 1) * e))
 
 class RNN(Model):
     def __init__(self, input_dim, hidden_dim=50, num_layers=3, dropout=0.2):
@@ -68,7 +71,7 @@ class RNNStockModel:
         self.y_test = np.concatenate([self.y_train[-self.sequence_length:], self.y_test])
 
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split_time_series(
-            self.X_train, self.y_train, test_size=0.2
+            self.X_train, self.y_train, test_size=0.1
         )
 
         self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, self.feature_scaler, self.target_scaler = preprocess_data(self.X_train, self.X_test, self.X_val, self.y_train, self.y_test, self.y_val, add_feature_dim=False)
@@ -92,7 +95,12 @@ class RNNStockModel:
 
     def build_model(self, input_dim, hidden_dim, num_layers, dropout, learning_rate):
         self.model = RNN(input_dim, hidden_dim=hidden_dim, num_layers=num_layers, dropout=dropout)
-        self.model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), loss="mse", metrics=["mae"])
+        self.model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate), 
+            loss="mse",
+            # loss=lambda y_true, y_pred: quantile_loss(0.9, y_true, y_pred),
+            metrics=["mae"]
+            )
         return self.model
 
     def train(self, batch_size, epochs, patience=5):
@@ -189,8 +197,9 @@ class RNNStockModel:
 
     def run(self, epochs=30, early_stop_patience=10):
         print(f"Training RNN model for {self.stock_name}...")
-        best_params = self.tune_hyperparameters(n_trials=50)
-        # best_params = {'num_layers': 2, 'hidden_dim': 250, 'dropout': 0.1, 'learning_rate': 0.0033321896009443535, 'batch_size': 32}
+        # best_params = self.tune_hyperparameters(n_trials=50)
+        # best_params = {'num_layers': 1, 'hidden_dim': 300, 'dropout': 0.1, 'learning_rate': 0.00033321896009443535, 'batch_size': 32}
+        best_params = {'num_layers': 2, 'hidden_dim': 200, 'dropout': 0.2, 'learning_rate': 0.001, 'batch_size': 32}
         self.hyperparameters = best_params
         input_dim = self.X_train.shape[2]
         self.build_model(
@@ -205,5 +214,5 @@ class RNNStockModel:
         predictions = self.predict()
         self.save_model()
         self.save_predictions(predictions)
-        self.save_hyperparameters()
+        # self.save_hyperparameters()
         return predictions

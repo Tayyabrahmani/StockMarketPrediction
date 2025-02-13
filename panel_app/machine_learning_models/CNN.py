@@ -291,11 +291,13 @@ class CNNStockModel:
         """
         Runs the full pipeline: trains the model, generates predictions, and saves the model and predictions.
         """
-        # best_params = self.run_tuning(n_trials=50, update_optuna_study=True)
-        best_params = {'num_filters': 32, 'dropout_rates': (0.085551670158269935, 0.16769817375735305),
+        # best_params = self.run_tuning(n_trials=25, update_optuna_study=True)
+        best_params = {'num_filters': 64, 'dropout_rates': (0.1, 0.1),
+                        # 'dropout_rates': (0.085551670158269935, 0.16769817375735305),
                        'embed_dim': 128, 'kernel_sizes': (3, 5, 7),
                        'num_conv_layers': 3, 'batch_size': 32,
-                       'learning_rate': 0.0001449580804866673,
+                       'learning_rate': 0.0015,
+                    #    'learning_rate': 0.001,
                        'epochs': 50}
         print(f"Best parameters found: {best_params}")
         self.hyperparameters = best_params
@@ -310,6 +312,7 @@ class CNNStockModel:
                          embed_dim=best_params["embed_dim"],
                          kernel_sizes=best_params["kernel_sizes"],
                          num_conv_layers=best_params["num_conv_layers"],
+                         activation="leaky_relu"
         )
 
         print("Training model...")
